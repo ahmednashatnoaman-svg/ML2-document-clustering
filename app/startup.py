@@ -2,8 +2,8 @@
 
 Called by the Streamlit app at startup when no trained models are found.
 Runs a reduced pipeline so the app becomes interactive quickly:
-  - Wikipedia People  : uses people_wiki.csv if present, else Wikipedia REST API fallback
-  - 20 Newsgroups     : downloaded automatically via sklearn
+  - 20 Newsgroups : downloaded automatically via sklearn (always available)
+  - Wikipedia     : only trained if people_wiki.csv is present locally
 """
 
 import logging
@@ -30,21 +30,40 @@ def _load_config() -> dict:
         return yaml.safe_load(f)
 
 
-def needs_setup() -> bool:
-    """Return True if any essential model or metrics files are missing."""
-    model_ok = (
-        (_MODELS_DIR / "tfidf_wikipedia.pkl").exists()
-        and (_MODELS_DIR / "tfidf_newsgroups.pkl").exists()
-    )
-    metrics_ok = (
-        (_REPORTS_DIR / "clustering_metrics_wikipedia.csv").exists()
+def _newsgroups_ready() -> bool:
+    return (
+        (_MODELS_DIR / "tfidf_newsgroups.pkl").exists()
         and (_REPORTS_DIR / "clustering_metrics_newsgroups.csv").exists()
     )
-    return not (model_ok and metrics_ok)
+
+
+def _wikipedia_ready() -> bool:
+    return (
+        (_MODELS_DIR / "tfidf_wikipedia.pkl").exists()
+        and (_REPORTS_DIR / "clustering_metrics_wikipedia.csv").exists()
+    )
+
+
+def _wikipedia_csv_present() -> bool:
+    """Return True if the Kaggle people_wiki.csv is available."""
+    try:
+        cfg = _load_config()
+        return (_RAW_DIR / cfg["datasets"]["wikipedia"]["filename"]).exists()
+    except Exception:
+        return False
+
+
+def needs_setup() -> bool:
+    """Return True if newsgroups models/metrics are missing.
+
+    Newsgroups is always auto-trainable via sklearn.
+    Wikipedia requires people_wiki.csv so it is optional.
+    """
+    return not _newsgroups_ready()
 
 
 def run_setup(status_callback=None) -> None:
-    """Run a fast pipeline for both datasets."""
+    """Train newsgroups always; train Wikipedia only if CSV is present."""
     def _status(msg: str) -> None:
         logger.info(msg)
         if status_callback:
@@ -54,19 +73,31 @@ def run_setup(status_callback=None) -> None:
 
     fast_config = dict(config)
     fast_config["clustering"] = {
-        "kmeans":      {"k_range": [5, 10, 20], "n_init": 5, "max_iter": 200},
+        "kmeans":       {"k_range": [5, 10, 20], "n_init": 5, "max_iter": 200},
         "hierarchical": {"n_clusters": [5, 10], "linkage": ["ward"], "max_docs": 5000},
-        "gmm":         {"n_components": [5, 10], "covariance_type": ["tied"], "max_iter": 50},
+        "gmm":          {"n_components": [5, 10], "covariance_type": ["tied"], "max_iter": 50},
     }
 
-    for dataset in ("wikipedia", "newsgroups"):
+    # Newsgroups — always train (sklearn downloads it automatically)
+    if not _newsgroups_ready():
         try:
-            _run_dataset(dataset, fast_config, _status)
+            _run_dataset("newsgroups", fast_config, _status)
         except Exception as exc:
-            logger.exception("Pipeline failed for %s: %s", dataset, exc)
-            _status(f"[{dataset}] WARNING: pipeline failed — {exc}. Continuing…")
+            logger.exception("Newsgroups pipeline failed: %s", exc)
+            _status(f"[newsgroups] ERROR: {exc}")
 
-    _status("Setup complete — dashboard ready!")
+    # Wikipedia — only if CSV exists locally
+    if not _wikipedia_ready():
+        if _wikipedia_csv_present():
+            try:
+                _run_dataset("wikipedia", fast_config, _status)
+            except Exception as exc:
+                logger.exception("Wikipedia pipeline failed: %s", exc)
+                _status(f"[wikipedia] ERROR: {exc}")
+        else:
+            _status("[wikipedia] people_wiki.csv not found — skipping Wikipedia training.")
+
+    _status("Setup complete!")
 
 
 def _run_dataset(dataset: str, config: dict, status) -> None:
@@ -93,6 +124,7 @@ def _run_dataset(dataset: str, config: dict, status) -> None:
             text_col=cfg["text_col"],
             name_col=cfg["name_col"],
             min_text_length=cfg["min_text_length"],
+            auto_download=False,
         )
 
     status(f"[{dataset}] Preprocessing {len(texts):,} documents…")

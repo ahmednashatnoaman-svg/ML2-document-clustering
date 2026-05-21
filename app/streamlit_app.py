@@ -78,19 +78,55 @@ st.markdown("""
 
     .stTabs [data-baseweb="tab-list"] button { font-size: 0.9rem; }
     div[data-testid="metric-container"] > label { font-size: 0.78rem; }
+
+    .cluster-item {
+        background-color: #f8fafc;
+        border-left: 4px solid #2d6a9f;
+        border-radius: 6px;
+        padding: 0.5rem 0.8rem;
+        margin-bottom: 0.4rem;
+        box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+        display: flex;
+        align-items: center;
+    }
+    .cluster-id {
+        font-weight: bold;
+        color: #1e3a5f;
+        background: #e2e8f0;
+        border-radius: 50%;
+        width: 24px;
+        height: 24px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        margin-right: 10px;
+        font-size: 0.85rem;
+        flex-shrink: 0;
+    }
+    .cluster-name {
+        color: #334155;
+        font-weight: 500;
+        font-size: 0.9rem;
+    }
 </style>
 """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------------------------
 # One-time cloud setup
 # ---------------------------------------------------------------------------
-from app.startup import needs_setup, run_setup  # noqa: E402
+from app.startup import needs_setup, run_setup, _wikipedia_ready  # noqa: E402
 
 if needs_setup():
-    st.info("First run — training clustering models. This may take a few minutes…")
+    st.info("First run — training clustering models (20 Newsgroups). This takes 2-4 minutes…")
     progress_text = st.empty()
     run_setup(status_callback=lambda msg: progress_text.text(msg))
     progress_text.empty()
+    if needs_setup():
+        st.error(
+            "Training did not complete successfully. "
+            "Check that all dependencies are installed and there is enough disk space."
+        )
+        st.stop()
     st.success("Models ready! Loading dashboard…")
     st.rerun()
 
@@ -238,11 +274,22 @@ def sidebar() -> dict:
 
     cfg = load_config()
 
+    wiki_available = _wikipedia_ready()
+    dataset_options = ["newsgroups", "wikipedia"] if wiki_available else ["newsgroups"]
+    dataset_labels  = {
+        "newsgroups": "20 Newsgroups",
+        "wikipedia":  "Wikipedia People",
+    }
     dataset = st.sidebar.selectbox(
         "Dataset",
-        ["newsgroups", "wikipedia"],
-        format_func=lambda x: "20 Newsgroups" if x == "newsgroups" else "Wikipedia People",
+        dataset_options,
+        format_func=lambda x: dataset_labels[x],
     )
+    if not wiki_available:
+        st.sidebar.info(
+            "Wikipedia dataset requires `people_wiki.csv` (Kaggle). "
+            "Run locally with the full dataset to enable it."
+        )
     algorithm = st.sidebar.selectbox(
         "Algorithm",
         ["kmeans", "hierarchical", "gmm"],
@@ -477,6 +524,52 @@ def tab_cluster_plot(params: dict, arts: dict) -> None:
     st.plotly_chart(fig, use_container_width=True)
     var = pca.explained_variance_ratio_
     st.caption(f"PC1: {var[0]:.1%} variance explained  |  PC2: {var[1]:.1%} variance explained")
+
+    st.markdown("---")
+    col1, col2 = st.columns([1, 1])
+
+    with col1:
+        st.markdown('<div class="section-header">Cluster Names</div>', unsafe_allow_html=True)
+        if names:
+            for cid, n in sorted(names.items()):
+                st.markdown(
+                    f'<div class="cluster-item">'
+                    f'<span class="cluster-id">{cid}</span>'
+                    f'<span class="cluster-name">{n}</span>'
+                    f'</div>',
+                    unsafe_allow_html=True
+                )
+        else:
+            st.info("No cluster names available.")
+
+    with col2:
+        st.markdown('<div class="section-header">Cluster Sizes</div>', unsafe_allow_html=True)
+        n_per_cluster = pd.Series(labels).value_counts().sort_index()
+        size_df = pd.DataFrame({
+            "Cluster ID": [str(c) for c in n_per_cluster.index],
+            "Cluster Name": [cluster_label(c, names) for c in n_per_cluster.index],
+            "Documents": n_per_cluster.values
+        })
+
+        fig_sz = px.bar(
+            size_df,
+            x="Cluster ID",
+            y="Documents",
+            color="Cluster Name",
+            text="Documents",
+            height=340,
+            labels={"Cluster ID": "Cluster ID", "Documents": "Number of Documents"},
+        )
+        fig_sz.update_traces(textposition="outside")
+        fig_sz.update_layout(
+            showlegend=False,
+            plot_bgcolor="white",
+            paper_bgcolor="white",
+            margin=dict(l=0, r=0, t=10, b=0),
+            yaxis_gridcolor="#f0f0f0",
+            xaxis=dict(type='category')
+        )
+        st.plotly_chart(fig_sz, use_container_width=True)
 
 
 # ---------------------------------------------------------------------------
@@ -740,10 +833,18 @@ def main():
     """, unsafe_allow_html=True)
 
     if arts is None:
-        st.error(
-            f"No trained artifacts found for **{params['dataset']}**.\n\n"
-            "Run the pipeline:\n```bash\npython run_pipeline.py\n```"
-        )
+        if params["dataset"] == "wikipedia":
+            st.warning(
+                "**Wikipedia dataset not available in this deployment.**\n\n"
+                "The Wikipedia People dataset requires `people_wiki.csv` from Kaggle. "
+                "Switch to **20 Newsgroups** in the sidebar to explore the available dataset, "
+                "or run the app locally with the full Kaggle dataset."
+            )
+        else:
+            st.error(
+                f"No trained artifacts found for **{params['dataset']}**.\n\n"
+                "Run the pipeline:\n```bash\npython run_pipeline.py\n```"
+            )
         st.stop()
 
     render_kpi_bar(params["dataset"], arts)
