@@ -462,39 +462,21 @@ def tab_cluster_plot(params: dict, arts: dict) -> None:
         "Cluster": cluster_labels_named, "Preview": hover_text,
     })
 
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        fig = px.scatter(
-            df_plot, x="PC1", y="PC2",
-            color="Cluster",
-            hover_data={"Preview": True, "PC1": False, "PC2": False},
-            opacity=0.55,
-            title=(f"PCA Projection — {ALGO_LABELS[params['algorithm']]} "
-                   f"k={params['k']} — {params['dataset']}"),
-            height=560,
-        )
-        fig.update_traces(marker=dict(size=4, line=dict(width=0)))
-        fig.update_layout(plot_bgcolor="white", paper_bgcolor="white",
-                          legend=dict(font=dict(size=10)))
-        st.plotly_chart(fig, use_container_width=True)
-        var = pca.explained_variance_ratio_
-        st.caption(f"PC1: {var[0]:.1%} variance explained  |  PC2: {var[1]:.1%} variance explained")
-
-    with col2:
-        st.markdown("**Cluster Names**")
-        if names:
-            for cid, n in sorted(names.items()):
-                st.markdown(f"`{cid}` {n}")
-        st.markdown("---")
-        n_per_cluster = pd.Series(labels).value_counts().sort_index()
-        st.markdown("**Cluster Sizes**")
-        size_df = pd.DataFrame({"Cluster": n_per_cluster.index,
-                                 "Docs": n_per_cluster.values})
-        fig_sz = px.bar(size_df, x="Cluster", y="Docs",
-                        color_discrete_sequence=["#2563eb"], height=280)
-        fig_sz.update_layout(showlegend=False, plot_bgcolor="white",
-                              paper_bgcolor="white", margin=dict(l=0, r=0, t=20, b=0))
-        st.plotly_chart(fig_sz, use_container_width=True)
+    fig = px.scatter(
+        df_plot, x="PC1", y="PC2",
+        color="Cluster",
+        hover_data={"Preview": True, "PC1": False, "PC2": False},
+        opacity=0.55,
+        title=(f"PCA Projection — {ALGO_LABELS[params['algorithm']]} "
+               f"k={params['k']} — {params['dataset']}"),
+        height=600,
+    )
+    fig.update_traces(marker=dict(size=4, line=dict(width=0)))
+    fig.update_layout(plot_bgcolor="white", paper_bgcolor="white",
+                      legend=dict(font=dict(size=10)))
+    st.plotly_chart(fig, use_container_width=True)
+    var = pca.explained_variance_ratio_
+    st.caption(f"PC1: {var[0]:.1%} variance explained  |  PC2: {var[1]:.1%} variance explained")
 
 
 # ---------------------------------------------------------------------------
