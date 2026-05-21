@@ -171,7 +171,10 @@ def load_cluster_names(dataset: str, algorithm: str, k: int, suffix: str = "") -
     arts   = load_artifacts(dataset)
     if labels is None or arts is None or not tfidf_path.exists():
         return {}
-    X_tfidf   = load_npz(str(tfidf_path))
+    X_tfidf = load_npz(str(tfidf_path))
+    X_reduced = arts["X_reduced"]
+    if X_reduced is not None:
+        _, X_tfidf, _ = _align_to_labels(labels, X_reduced, X_tfidf_full=X_tfidf)
     top_terms = get_top_terms(labels, arts["vectorizer"], X_tfidf, n=5)
     return get_cluster_names(top_terms, n_words=3)
 
@@ -179,6 +182,36 @@ def load_cluster_names(dataset: str, algorithm: str, k: int, suffix: str = "") -
 def cluster_label(cluster_id: int, names: dict[int, str]) -> str:
     name = names.get(int(cluster_id), "")
     return f"Cluster {cluster_id} — {name}" if name else f"Cluster {cluster_id}"
+
+
+def _hier_sample_idx(n_total: int) -> np.ndarray | None:
+    """Reproduce the subsample indices used when fitting hierarchical on large corpora.
+
+    Returns None when the corpus was small enough to fit without sampling.
+    """
+    cfg = load_config()
+    max_docs = cfg["clustering"]["hierarchical"].get("max_docs", 8000)
+    if n_total <= max_docs:
+        return None
+    rng = np.random.default_rng(cfg["seed"])
+    return rng.choice(n_total, max_docs, replace=False)
+
+
+def _align_to_labels(labels: np.ndarray, X_full: np.ndarray,
+                     X_tfidf_full=None, corpus_full=None):
+    """When hierarchical labels cover only a subsample, slice X/corpus to match."""
+    n_full = X_full.shape[0]
+    if len(labels) == n_full:
+        return X_full, X_tfidf_full, corpus_full
+
+    idx = _hier_sample_idx(n_full)
+    if idx is None or len(idx) != len(labels):
+        return X_full, X_tfidf_full, corpus_full
+
+    X_sub      = X_full[idx]
+    X_tfidf_sub = X_tfidf_full[idx] if X_tfidf_full is not None else None
+    corpus_sub  = [corpus_full[i] for i in idx] if corpus_full is not None else None
+    return X_sub, X_tfidf_sub, corpus_sub
 
 
 # ---------------------------------------------------------------------------
@@ -409,13 +442,15 @@ def tab_cluster_plot(params: dict, arts: dict) -> None:
                                 params["k"], params["suffix"])
 
     from sklearn.decomposition import PCA
-    X    = arts["X_reduced"]
-    pca  = PCA(n_components=2, random_state=42)
-    coords = pca.fit_transform(X)
-
     corpus = load_corpus(params["dataset"])
-    hover_text = ([c[:120] for c in corpus]
-                  if corpus and len(corpus) == len(labels)
+    X_vis, _, corpus_vis = _align_to_labels(labels, arts["X_reduced"],
+                                             corpus_full=corpus)
+
+    pca    = PCA(n_components=2, random_state=42)
+    coords = pca.fit_transform(X_vis)
+
+    hover_text = ([c[:120] for c in corpus_vis]
+                  if corpus_vis and len(corpus_vis) == len(labels)
                   else [f"doc {i}" for i in range(len(labels))])
 
     cluster_labels_named = [cluster_label(c, names) for c in labels]
@@ -489,11 +524,17 @@ def tab_cluster_explorer(params: dict, arts: dict) -> None:
     from scipy.sparse import load_npz
     tfidf_path = Path(PROCESSED_DIR) / f"X_tfidf_{params['dataset']}.npz"
 
+    corpus = load_corpus(params["dataset"])
+    _, X_tfidf_aligned, corpus_aligned = _align_to_labels(
+        labels, arts["X_reduced"],
+        X_tfidf_full=load_npz(str(tfidf_path)) if tfidf_path.exists() else None,
+        corpus_full=corpus,
+    )
+
     col1, col2 = st.columns([2, 1])
-    if tfidf_path.exists():
-        X_tfidf = load_npz(str(tfidf_path))
+    if tfidf_path.exists() and X_tfidf_aligned is not None:
         from src.evaluation import get_top_terms
-        top_terms = get_top_terms(labels, arts["vectorizer"], X_tfidf, n=15)
+        top_terms = get_top_terms(labels, arts["vectorizer"], X_tfidf_aligned, n=15)
         terms = top_terms.get(int(selected_cluster), [])
 
         with col1:
@@ -522,10 +563,9 @@ def tab_cluster_explorer(params: dict, arts: dict) -> None:
                 for i, t in enumerate(terms, 1):
                     st.write(f"{i}. `{t}`")
 
-    corpus = load_corpus(params["dataset"])
-    if corpus and len(corpus) == len(labels):
+    if corpus_aligned and len(corpus_aligned) == len(labels):
         from src.evaluation import get_cluster_examples
-        examples = get_cluster_examples(labels, corpus, n=5, snippet_len=350)
+        examples = get_cluster_examples(labels, corpus_aligned, n=5, snippet_len=350)
         docs = examples.get(int(selected_cluster), [])
         st.markdown("**Sample Documents**")
         for i, doc in enumerate(docs, 1):
@@ -677,9 +717,13 @@ def tab_predict(params: dict, arts: dict) -> None:
                 tfidf_path = Path(PROCESSED_DIR) / f"X_tfidf_{params['dataset']}.npz"
                 labels_arr = load_labels(params["dataset"], algo, k, suffix)
                 if labels_arr is not None and tfidf_path.exists():
-                    X_tfidf = load_npz(str(tfidf_path))
+                    X_tfidf_full = load_npz(str(tfidf_path))
+                    _, X_tfidf_aligned, _ = _align_to_labels(
+                        labels_arr, arts["X_reduced"], X_tfidf_full=X_tfidf_full
+                    )
                     from src.evaluation import get_top_terms
-                    top_terms = get_top_terms(labels_arr, arts["vectorizer"], X_tfidf, n=12)
+                    top_terms = get_top_terms(labels_arr, arts["vectorizer"],
+                                              X_tfidf_aligned, n=12)
                     terms = top_terms.get(cluster_id, [])
                     if terms:
                         st.markdown("**Cluster Top Terms:**")
