@@ -17,7 +17,7 @@ from src.preprocessing import preprocess_text
 from src.features import transform_new_docs
 
 # ---------------------------------------------------------------------------
-# Page config
+# Page config  (must be first Streamlit call)
 # ---------------------------------------------------------------------------
 st.set_page_config(
     page_title="Document Clustering Explorer",
@@ -25,6 +25,24 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
+# ---------------------------------------------------------------------------
+# One-time cloud setup — trains models if they are not present
+# (runs automatically on Hugging Face Spaces first boot)
+# ---------------------------------------------------------------------------
+from app.startup import needs_setup, run_setup  # noqa: E402
+
+if needs_setup():
+    st.info("First run — training clustering models. This takes ~60 seconds…")
+    progress_text = st.empty()
+
+    def _update(msg: str) -> None:
+        progress_text.text(msg)
+
+    run_setup(status_callback=_update)
+    progress_text.empty()
+    st.success("Models ready! Loading dashboard…")
+    st.rerun()
 
 CONFIG_PATH = "configs/config.yaml"
 MODELS_DIR = "models"
