@@ -3,9 +3,8 @@ title: Document Clustering Explorer
 emoji: 🔍
 colorFrom: blue
 colorTo: purple
-sdk: streamlit
-sdk_version: 1.46.0
-app_file: app/streamlit_app.py
+sdk: docker
+app_port: 8501
 pinned: false
 license: mit
 ---
