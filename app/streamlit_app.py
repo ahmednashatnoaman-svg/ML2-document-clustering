@@ -95,13 +95,15 @@ if needs_setup():
     st.rerun()
 
 # ---------------------------------------------------------------------------
-# Constants
+# Constants — absolute paths so the app works from any CWD (Streamlit Cloud)
 # ---------------------------------------------------------------------------
-CONFIG_PATH   = "configs/config.yaml"
-MODELS_DIR    = "models"
-PROCESSED_DIR = "data/processed"
-REPORTS_DIR   = "outputs/reports"
-FIGURES_DIR   = "outputs/figures"
+_ROOT = Path(__file__).resolve().parents[1]
+
+CONFIG_PATH   = str(_ROOT / "configs" / "config.yaml")
+MODELS_DIR    = str(_ROOT / "models")
+PROCESSED_DIR = str(_ROOT / "data" / "processed")
+REPORTS_DIR   = str(_ROOT / "outputs" / "reports")
+FIGURES_DIR   = str(_ROOT / "outputs" / "figures")
 
 ALGO_LABELS = {"kmeans": "K-Means", "hierarchical": "Hierarchical", "gmm": "GMM"}
 ALGO_COLORS = {"kmeans": "#2563eb", "hierarchical": "#d97706", "gmm": "#16a34a"}
