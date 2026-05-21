@@ -123,16 +123,23 @@ def save_feature_artifacts(
     models_dir: str = "models",
     processed_dir: str = "data/processed",
 ) -> None:
-    """Persist vectorizer, SVD pipeline, and matrices to disk."""
+    """Persist vectorizer, SVD pipeline, and matrices to disk.
+
+    X_reduced is saved to both models/ (committed to git) and data/processed/
+    so deployments without a training step can still load it.
+    """
+    from scipy.sparse import save_npz
+
     Path(models_dir).mkdir(parents=True, exist_ok=True)
     Path(processed_dir).mkdir(parents=True, exist_ok=True)
 
     joblib.dump(vectorizer, f"{models_dir}/tfidf_{dataset_name}.pkl")
     joblib.dump(svd_pipeline, f"{models_dir}/svd_{dataset_name}.pkl")
+
+    # Save X_reduced in models/ so it is included in git alongside the models
+    np.save(f"{models_dir}/X_reduced_{dataset_name}.npy", X_reduced)
     np.save(f"{processed_dir}/X_reduced_{dataset_name}.npy", X_reduced)
 
-    # Save sparse TF-IDF matrix
-    from scipy.sparse import save_npz
     save_npz(f"{processed_dir}/X_tfidf_{dataset_name}.npz", X_tfidf)
 
     logger.info("Feature artifacts saved for dataset: %s", dataset_name)

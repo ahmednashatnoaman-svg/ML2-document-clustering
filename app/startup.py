@@ -1,9 +1,9 @@
 """One-time model initialisation for cloud deployments (Streamlit Cloud / HF Spaces).
 
-Called by the Streamlit app at startup when no trained models are found.
-Runs a reduced pipeline so the app becomes interactive quickly:
+On first boot:
   - 20 Newsgroups : downloaded automatically via sklearn (always available)
-  - Wikipedia     : only trained if people_wiki.csv is present locally
+  - Wikipedia     : uses people_wiki.csv if present; otherwise streams 5 000 articles
+                    from the HuggingFace wiki_bio dataset (no credentials required)
 """
 
 import logging
@@ -45,7 +45,6 @@ def _wikipedia_ready() -> bool:
 
 
 def _wikipedia_csv_present() -> bool:
-    """Return True if the Kaggle people_wiki.csv is available."""
     try:
         cfg = _load_config()
         return (_RAW_DIR / cfg["datasets"]["wikipedia"]["filename"]).exists()
@@ -54,23 +53,18 @@ def _wikipedia_csv_present() -> bool:
 
 
 def needs_setup() -> bool:
-    """Return True if newsgroups models/metrics are missing.
-
-    Newsgroups is always auto-trainable via sklearn.
-    Wikipedia requires people_wiki.csv so it is optional.
-    """
+    """Return True if newsgroups training is needed (always auto-trainable)."""
     return not _newsgroups_ready()
 
 
 def run_setup(status_callback=None) -> None:
-    """Train newsgroups always; train Wikipedia only if CSV is present."""
+    """Train newsgroups unconditionally; train Wikipedia when data is available."""
     def _status(msg: str) -> None:
         logger.info(msg)
         if status_callback:
             status_callback(msg)
 
     config = _load_config()
-
     fast_config = dict(config)
     fast_config["clustering"] = {
         "kmeans":       {"k_range": [5, 10, 20], "n_init": 5, "max_iter": 200},
@@ -78,7 +72,6 @@ def run_setup(status_callback=None) -> None:
         "gmm":          {"n_components": [5, 10], "covariance_type": ["tied"], "max_iter": 50},
     }
 
-    # Newsgroups — always train (sklearn downloads it automatically)
     if not _newsgroups_ready():
         try:
             _run_dataset("newsgroups", fast_config, _status)
@@ -86,7 +79,6 @@ def run_setup(status_callback=None) -> None:
             logger.exception("Newsgroups pipeline failed: %s", exc)
             _status(f"[newsgroups] ERROR: {exc}")
 
-    # Wikipedia — only if CSV exists locally
     if not _wikipedia_ready():
         if _wikipedia_csv_present():
             try:
@@ -95,17 +87,43 @@ def run_setup(status_callback=None) -> None:
                 logger.exception("Wikipedia pipeline failed: %s", exc)
                 _status(f"[wikipedia] ERROR: {exc}")
         else:
-            _status("[wikipedia] people_wiki.csv not found — skipping Wikipedia training.")
+            _status("[wikipedia] No local CSV — fetching sample from HuggingFace wiki_bio…")
+            try:
+                _run_wikipedia_from_hf(fast_config, _status)
+            except Exception as exc:
+                logger.exception("Wikipedia HF fallback failed: %s", exc)
+                _status(f"[wikipedia] HF fallback failed: {exc}. Wikipedia unavailable.")
 
     _status("Setup complete!")
 
 
+def _run_wikipedia_from_hf(config: dict, status) -> None:
+    """Stream 5 000 biographical articles from HuggingFace wiki_bio dataset."""
+    from itertools import islice
+    from datasets import load_dataset
+
+    status("[wikipedia] Streaming wiki_bio from HuggingFace (5 000 articles)…")
+    ds = load_dataset("wiki_bio", split="train", streaming=True, trust_remote_code=True)
+    texts = [
+        ex.get("target_text", "") or ex.get("first_paragraph", "")
+        for ex in islice(ds, 5000)
+        if (ex.get("target_text") or ex.get("first_paragraph", ""))
+    ]
+    if len(texts) < 100:
+        raise RuntimeError(f"wiki_bio returned only {len(texts)} articles — too few to cluster.")
+
+    status(f"[wikipedia] Loaded {len(texts):,} articles from wiki_bio.")
+
+    _RAW_DIR.mkdir(parents=True, exist_ok=True)
+    _PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
+    _MODELS_DIR.mkdir(parents=True, exist_ok=True)
+    _REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+
+    _train_on_texts("wikipedia", texts, config, status)
+
+
 def _run_dataset(dataset: str, config: dict, status) -> None:
     from src.data_loader import load_newsgroups, load_wikipedia_people
-    from src.preprocessing import preprocess_corpus
-    from src.features import build_tfidf, reduce_with_svd, save_feature_artifacts
-    from src.clustering import run_all_experiments, save_cluster_results
-    from src.evaluation import evaluate_all_experiments, save_metrics
 
     _RAW_DIR.mkdir(parents=True, exist_ok=True)
     _PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
@@ -126,6 +144,16 @@ def _run_dataset(dataset: str, config: dict, status) -> None:
             min_text_length=cfg["min_text_length"],
             auto_download=False,
         )
+
+    _train_on_texts(dataset, texts, config, status)
+
+
+def _train_on_texts(dataset: str, texts: list, config: dict, status) -> None:
+    """Preprocess, featurise, cluster, and evaluate a list of texts."""
+    from src.preprocessing import preprocess_corpus
+    from src.features import build_tfidf, reduce_with_svd, save_feature_artifacts
+    from src.clustering import run_all_experiments, save_cluster_results
+    from src.evaluation import evaluate_all_experiments, save_metrics
 
     status(f"[{dataset}] Preprocessing {len(texts):,} documents…")
     processed, _ = preprocess_corpus(texts)
@@ -166,4 +194,4 @@ def _run_dataset(dataset: str, config: dict, status) -> None:
         X_tfidf=X_tfidf, corpus=processed, config=config,
     )
     save_metrics(metrics_df, dataset=dataset, reports_dir=str(_REPORTS_DIR))
-    status(f"[{dataset}] Done — {len(results['kmeans'])} K-Means models ready.")
+    status(f"[{dataset}] Done — {len(results['kmeans'])} K-Means models saved.")

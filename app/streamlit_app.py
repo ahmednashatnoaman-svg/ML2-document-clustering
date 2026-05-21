@@ -156,31 +156,56 @@ def load_config():
 
 @st.cache_resource(show_spinner="Loading artifacts…")
 def load_artifacts(dataset: str):
-    vec_path      = Path(MODELS_DIR) / f"tfidf_{dataset}.pkl"
-    svd_path      = Path(MODELS_DIR) / f"svd_{dataset}.pkl"
-    X_reduced_path = Path(PROCESSED_DIR) / f"X_reduced_{dataset}.npy"
+    vec_path = Path(MODELS_DIR) / f"tfidf_{dataset}.pkl"
+    svd_path = Path(MODELS_DIR) / f"svd_{dataset}.pkl"
     if not vec_path.exists():
         return None
     vectorizer   = joblib.load(vec_path)
     svd_pipeline = joblib.load(svd_path)
-    X_reduced    = np.load(X_reduced_path) if X_reduced_path.exists() else None
-    models = {pkl.stem: joblib.load(pkl)
-              for pkl in Path(MODELS_DIR).glob(f"*_{dataset}_k*.pkl")}
+    # Look for X_reduced in models/ first (committed to git), then data/processed/
+    X_reduced = None
+    for base in [MODELS_DIR, PROCESSED_DIR]:
+        xr = Path(base) / f"X_reduced_{dataset}.npy"
+        if xr.exists():
+            X_reduced = np.load(xr)
+            break
+    models = {
+        pkl.stem: joblib.load(pkl)
+        for pkl in Path(MODELS_DIR).glob(f"*_{dataset}_k*.pkl")
+    }
     return {"vectorizer": vectorizer, "svd_pipeline": svd_pipeline,
             "X_reduced": X_reduced, "models": models}
+
+
+def _x_reduced(dataset: str) -> np.ndarray | None:
+    """Load X_reduced from models/ or data/processed/, whichever exists."""
+    for base in [MODELS_DIR, PROCESSED_DIR]:
+        p = Path(base) / f"X_reduced_{dataset}.npy"
+        if p.exists():
+            return np.load(p)
+    return None
 
 
 @st.cache_data(show_spinner=False)
 def load_labels(dataset: str, algorithm: str, k: int, suffix: str = "") -> np.ndarray | None:
     key  = f"{algorithm}_{dataset}_k{k}{('_' + suffix) if suffix else ''}"
+    # Prefer precomputed labels saved alongside the model (in git)
+    for base in [MODELS_DIR, PROCESSED_DIR]:
+        lp = Path(base) / f"{key}_labels.npy"
+        if lp.exists():
+            return np.load(lp)
+    # Fall back: load model and derive labels
     path = Path(MODELS_DIR) / f"{key}.pkl"
     if not path.exists():
         return None
     model = joblib.load(path)
-    if hasattr(model, "predict"):
-        X = np.load(Path(PROCESSED_DIR) / f"X_reduced_{dataset}.npy")
-        return model.predict(X)
-    return model.labels_
+    if hasattr(model, "labels_"):
+        return model.labels_
+    # predict() needs X_reduced
+    X = _x_reduced(dataset)
+    if X is None:
+        return None
+    return model.predict(X)
 
 
 @st.cache_data(show_spinner=False)
@@ -201,19 +226,64 @@ def load_corpus(dataset: str) -> list[str] | None:
 
 @st.cache_data(show_spinner=False)
 def load_cluster_names(dataset: str, algorithm: str, k: int, suffix: str = "") -> dict[int, str]:
-    from scipy.sparse import load_npz
-    from src.evaluation import get_top_terms, get_cluster_names
+    """Compute cluster names — works with X_tfidf if available, falls back to model centroids."""
+    from src.evaluation import get_cluster_names
 
-    tfidf_path = Path(PROCESSED_DIR) / f"X_tfidf_{dataset}.npz"
-    labels = load_labels(dataset, algorithm, k, suffix)
-    arts   = load_artifacts(dataset)
-    if labels is None or arts is None or not tfidf_path.exists():
+    arts = load_artifacts(dataset)
+    if arts is None:
         return {}
-    X_tfidf = load_npz(str(tfidf_path))
-    X_reduced = arts["X_reduced"]
-    if X_reduced is not None:
-        _, X_tfidf, _ = _align_to_labels(labels, X_reduced, X_tfidf_full=X_tfidf)
-    top_terms = get_top_terms(labels, arts["vectorizer"], X_tfidf, n=5)
+
+    vectorizer   = arts["vectorizer"]
+    svd_pipeline = arts["svd_pipeline"]
+    feature_names = vectorizer.get_feature_names_out()
+    svd = svd_pipeline.named_steps["svd"]
+
+    key = f"{algorithm}_{dataset}_k{k}{('_' + suffix) if suffix else ''}"
+    model_path = Path(MODELS_DIR) / f"{key}.pkl"
+
+    # --- Path 1: X_tfidf available → compute centroid means directly ---
+    tfidf_path = Path(PROCESSED_DIR) / f"X_tfidf_{dataset}.npz"
+    if tfidf_path.exists():
+        from scipy.sparse import load_npz
+        from src.evaluation import get_top_terms
+        labels = load_labels(dataset, algorithm, k, suffix)
+        if labels is not None:
+            X_tfidf = load_npz(str(tfidf_path))
+            X_red   = arts["X_reduced"]
+            if X_red is not None:
+                _, X_tfidf, _ = _align_to_labels(labels, X_red, X_tfidf_full=X_tfidf)
+            top_terms = get_top_terms(labels, vectorizer, X_tfidf, n=5)
+            return get_cluster_names(top_terms, n_words=3)
+
+    # --- Path 2: no X_tfidf → use model centroids back-projected through SVD ---
+    if not model_path.exists():
+        return {}
+    model = joblib.load(model_path)
+
+    centroids_svd: np.ndarray | None = None
+    if hasattr(model, "cluster_centers_"):      # KMeans
+        centroids_svd = model.cluster_centers_
+    elif hasattr(model, "means_"):               # GMM
+        centroids_svd = model.means_
+    else:                                        # Hierarchical — use labels + X_reduced
+        labels = load_labels(dataset, algorithm, k, suffix)
+        X_red  = arts["X_reduced"]
+        if labels is not None and X_red is not None:
+            X_aligned, _, _ = _align_to_labels(labels, X_red)
+            centroids_svd = np.array([
+                X_aligned[labels == i].mean(axis=0)
+                for i in range(k)
+                if (labels == i).any()
+            ])
+
+    if centroids_svd is None or len(centroids_svd) == 0:
+        return {}
+
+    centroids_tfidf = svd.inverse_transform(centroids_svd)
+    top_terms = {
+        i: [feature_names[j] for j in np.argsort(row)[-5:][::-1]]
+        for i, row in enumerate(centroids_tfidf)
+    }
     return get_cluster_names(top_terms, n_words=3)
 
 

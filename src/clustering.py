@@ -244,14 +244,15 @@ def save_cluster_results(
     dataset: str,
     models_dir: str = "models",
 ) -> None:
-    """Save all fitted models to disk with consistent naming."""
+    """Save fitted models and precomputed labels to disk."""
     Path(models_dir).mkdir(parents=True, exist_ok=True)
     for algo, result_list in results.items():
         for r in result_list:
             suffix = _result_suffix(r)
-            path = f"{models_dir}/{algo}_{dataset}_{suffix}.pkl"
-            joblib.dump(r.model, path)
-    logger.info("Saved all cluster models for dataset: %s", dataset)
+            key = f"{algo}_{dataset}_{suffix}"
+            joblib.dump(r.model, f"{models_dir}/{key}.pkl")
+            np.save(f"{models_dir}/{key}_labels.npy", r.labels)
+    logger.info("Saved all cluster models and labels for dataset: %s", dataset)
 
 
 def load_cluster_model(
