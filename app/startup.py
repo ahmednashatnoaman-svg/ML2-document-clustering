@@ -31,8 +31,16 @@ def _load_config() -> dict:
 
 
 def needs_setup() -> bool:
-    """Return True if essential model files are missing."""
-    return not (_MODELS_DIR / "tfidf_wikipedia.pkl").exists()
+    """Return True if any essential model or metrics files are missing."""
+    model_ok = (
+        (_MODELS_DIR / "tfidf_wikipedia.pkl").exists()
+        and (_MODELS_DIR / "tfidf_newsgroups.pkl").exists()
+    )
+    metrics_ok = (
+        (_REPORTS_DIR / "clustering_metrics_wikipedia.csv").exists()
+        and (_REPORTS_DIR / "clustering_metrics_newsgroups.csv").exists()
+    )
+    return not (model_ok and metrics_ok)
 
 
 def run_setup(status_callback=None) -> None:
@@ -52,7 +60,11 @@ def run_setup(status_callback=None) -> None:
     }
 
     for dataset in ("wikipedia", "newsgroups"):
-        _run_dataset(dataset, fast_config, _status)
+        try:
+            _run_dataset(dataset, fast_config, _status)
+        except Exception as exc:
+            logger.exception("Pipeline failed for %s: %s", dataset, exc)
+            _status(f"[{dataset}] WARNING: pipeline failed — {exc}. Continuing…")
 
     _status("Setup complete — dashboard ready!")
 
