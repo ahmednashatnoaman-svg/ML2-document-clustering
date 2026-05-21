@@ -953,7 +953,7 @@ def tab_predict(params: dict, arts: dict) -> None:
 # ---------------------------------------------------------------------------
 
 def main():
-    dataset_display = {"newsgroups": "20 Newsgroups", "wikipedia": "Wikipedia People"}
+    dataset_display = {"newsgroups": "20 Newsgroups", "wikipedia": "Wikipedia"}
 
     params = sidebar()
     arts   = load_artifacts(params["dataset"])
