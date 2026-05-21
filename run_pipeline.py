@@ -213,22 +213,35 @@ def step_visualize(
         best = best_result(metrics_df, algorithm=algo, metric="silhouette")
         k = int(best["k"])
 
-        # Load the best model and predict labels
+        # Load the best model and get labels
         model_files = list(Path(config["paths"]["models"]).glob(f"{algo}_{dataset}_k{k}*.pkl"))
         if not model_files:
             logger.warning("No saved model found for %s k=%d — skipping visualizations", algo, k)
             continue
         import joblib
         model = joblib.load(model_files[0])
-        # AgglomerativeClustering has no predict — labels stored in .labels_
+
+        # AgglomerativeClustering stores labels from its fit sample; use that sample for visuals
         if hasattr(model, "predict"):
             labels_arr = model.predict(X_reduced)
+            X_vis = X_reduced
+            X_tfidf_vis = X_tfidf
         else:
             labels_arr = model.labels_
+            n_labels = len(labels_arr)
+            if n_labels < X_reduced.shape[0]:
+                # Hierarchical was fitted on a sample — visualise on same sample size
+                rng = np.random.default_rng(config["seed"])
+                sample_idx = rng.choice(X_reduced.shape[0], n_labels, replace=False)
+                X_vis = X_reduced[sample_idx]
+                X_tfidf_vis = X_tfidf[sample_idx]
+            else:
+                X_vis = X_reduced
+                X_tfidf_vis = X_tfidf
 
-        plot_pca_clusters(X_reduced, labels_arr, algo, k, dataset, figures_dir=figs_dir)
+        plot_pca_clusters(X_vis, labels_arr, algo, k, dataset, figures_dir=figs_dir)
         plot_tsne_clusters(
-            X_reduced, labels_arr, algo, k, dataset,
+            X_vis, labels_arr, algo, k, dataset,
             perplexity=config["visualization"]["tsne"]["perplexity"],
             n_iter=config["visualization"]["tsne"]["n_iter"],
             figures_dir=figs_dir,
@@ -237,9 +250,9 @@ def step_visualize(
 
         # Top-terms heatmap
         from src.evaluation import get_top_terms
-        top_terms = get_top_terms(labels_arr, vectorizer, X_tfidf, n=10)
+        top_terms = get_top_terms(labels_arr, vectorizer, X_tfidf_vis, n=10)
         plot_top_terms_heatmap(
-            top_terms, labels_arr, vectorizer, X_tfidf,
+            top_terms, labels_arr, vectorizer, X_tfidf_vis,
             algo, k, dataset, n_terms=10, figures_dir=figs_dir,
         )
 

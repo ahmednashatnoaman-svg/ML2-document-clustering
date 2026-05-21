@@ -200,10 +200,23 @@ def run_all_experiments(
         )
         results["kmeans"].append(r)
 
-    # Hierarchical sweep
+    # Hierarchical sweep — sample large corpora to avoid O(n²) memory crash
+    max_hier = cfg["hierarchical"].get("max_docs", 8000)
+    hier_sample_idx: Optional[np.ndarray] = None
+    X_hier = X
+    if X.shape[0] > max_hier:
+        rng = np.random.default_rng(seed)
+        hier_sample_idx = rng.choice(X.shape[0], max_hier, replace=False)
+        X_hier = X[hier_sample_idx]
+        logger.warning(
+            "[Hierarchical] corpus too large (%d docs) — sampling %d for fitting",
+            X.shape[0], max_hier,
+        )
     for k in cfg["hierarchical"]["n_clusters"]:
         for linkage in cfg["hierarchical"]["linkage"]:
-            r = run_hierarchical(X, n_clusters=k, linkage=linkage, dataset=dataset)
+            r = run_hierarchical(X_hier, n_clusters=k, linkage=linkage, dataset=dataset)
+            if hier_sample_idx is not None:
+                r.extra["sample_idx"] = hier_sample_idx
             results["hierarchical"].append(r)
 
     # GMM sweep

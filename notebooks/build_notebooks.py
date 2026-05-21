@@ -434,7 +434,7 @@ import os
 
 plots = [
     ('../outputs/figures/tsne_kmeans_k25_newsgroups.png', '20 Newsgroups — KMeans k=25'),
-    ('../outputs/figures/tsne_kmeans_k25_wikipedia.png',  'Wikipedia — KMeans k=25'),
+    ('../outputs/figures/tsne_kmeans_k20_wikipedia.png',  'Wikipedia — KMeans k=20'),
 ]
 fig, axes = plt.subplots(1, 2, figsize=(16, 7))
 for ax, (path, title) in zip(axes, plots):
@@ -446,9 +446,9 @@ plt.tight_layout(); plt.show()
         md("## 7. Conclusions\n\n"
            "| Metric | 20 Newsgroups winner | Wikipedia winner |\n"
            "|--------|---------------------|------------------|\n"
-           "| Silhouette | K-Means k=25 (0.055) | K-Means k=25 (0.137) |\n"
-           "| Davies-Bouldin | K-Means k=25 (3.62) | K-Means k=25 (2.57) |\n"
-           "| Calinski-Harabasz | K-Means k=5 (372) | K-Means k=5 (18.75) |\n\n"
+           "| Silhouette | K-Means k=25 (0.055) | K-Means k=20 (0.119) |\n"
+           "| Davies-Bouldin | K-Means k=25 (3.62) | K-Means k=20 (2.59) |\n"
+           "| Calinski-Harabasz | K-Means k=5 (2065) | K-Means k=5 (2065) |\n\n"
            "**Key findings:**\n"
            "- K-Means consistently outperforms Hierarchical and GMM on silhouette.\n"
            "- Wikipedia (shorter, topic-focused bios) clusters more cleanly (sil×2.5 higher).\n"

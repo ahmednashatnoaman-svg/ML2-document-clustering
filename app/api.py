@@ -92,7 +92,6 @@ async def lifespan(app: FastAPI):
             logger.info("Loaded metrics for: %s", dataset)
     logger.info("API startup complete. Datasets ready: %s", list(state.artifacts.keys()))
     yield
-    # cleanup (nothing needed)
 
 
 # ---------------------------------------------------------------------------

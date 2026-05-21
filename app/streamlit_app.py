@@ -3,13 +3,13 @@
 import sys
 from pathlib import Path
 
-# Allow imports from project root
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import joblib
 import numpy as np
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import streamlit as st
 import yaml
 
@@ -27,29 +27,84 @@ st.set_page_config(
 )
 
 # ---------------------------------------------------------------------------
-# One-time cloud setup — trains models if they are not present
-# (runs automatically on Hugging Face Spaces first boot)
+# Global CSS
+# ---------------------------------------------------------------------------
+st.markdown("""
+<style>
+    .main-header {
+        background: linear-gradient(135deg, #1e3a5f 0%, #2d6a9f 100%);
+        padding: 1.5rem 2rem;
+        border-radius: 12px;
+        margin-bottom: 1.5rem;
+        color: white;
+    }
+    .main-header h1 { color: white; margin: 0; font-size: 2rem; }
+    .main-header p  { color: #c8e0f5; margin: 0.3rem 0 0; font-size: 1rem; }
+
+    .kpi-card {
+        background: white;
+        border: 1px solid #e0e7ef;
+        border-radius: 10px;
+        padding: 1rem 1.2rem;
+        text-align: center;
+        box-shadow: 0 2px 6px rgba(0,0,0,0.05);
+    }
+    .kpi-card .label { color: #6b7280; font-size: 0.78rem; font-weight: 600;
+                       text-transform: uppercase; letter-spacing: 0.05em; }
+    .kpi-card .value { color: #1e3a5f; font-size: 1.9rem; font-weight: 700;
+                       line-height: 1.2; margin: 0.2rem 0; }
+    .kpi-card .delta { font-size: 0.78rem; }
+    .delta-good { color: #16a34a; }
+    .delta-info { color: #2563eb; }
+
+    .section-header {
+        color: #1e3a5f;
+        font-size: 1.05rem;
+        font-weight: 700;
+        border-left: 4px solid #2d6a9f;
+        padding-left: 0.7rem;
+        margin: 1.2rem 0 0.8rem;
+    }
+    .badge {
+        display: inline-block;
+        padding: 0.2em 0.6em;
+        border-radius: 12px;
+        font-size: 0.75rem;
+        font-weight: 600;
+    }
+    .badge-kmeans    { background: #dbeafe; color: #1d4ed8; }
+    .badge-hier      { background: #fef3c7; color: #92400e; }
+    .badge-gmm       { background: #dcfce7; color: #166534; }
+
+    .stTabs [data-baseweb="tab-list"] button { font-size: 0.9rem; }
+    div[data-testid="metric-container"] > label { font-size: 0.78rem; }
+</style>
+""", unsafe_allow_html=True)
+
+# ---------------------------------------------------------------------------
+# One-time cloud setup
 # ---------------------------------------------------------------------------
 from app.startup import needs_setup, run_setup  # noqa: E402
 
 if needs_setup():
-    st.info("First run — training clustering models. This takes ~60 seconds…")
+    st.info("First run — training clustering models. This may take a few minutes…")
     progress_text = st.empty()
-
-    def _update(msg: str) -> None:
-        progress_text.text(msg)
-
-    run_setup(status_callback=_update)
+    run_setup(status_callback=lambda msg: progress_text.text(msg))
     progress_text.empty()
     st.success("Models ready! Loading dashboard…")
     st.rerun()
 
-CONFIG_PATH = "configs/config.yaml"
-MODELS_DIR = "models"
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+CONFIG_PATH   = "configs/config.yaml"
+MODELS_DIR    = "models"
 PROCESSED_DIR = "data/processed"
-REPORTS_DIR = "outputs/reports"
-FIGURES_DIR = "outputs/figures"
+REPORTS_DIR   = "outputs/reports"
+FIGURES_DIR   = "outputs/figures"
 
+ALGO_LABELS = {"kmeans": "K-Means", "hierarchical": "Hierarchical", "gmm": "GMM"}
+ALGO_COLORS = {"kmeans": "#2563eb", "hierarchical": "#d97706", "gmm": "#16a34a"}
 
 # ---------------------------------------------------------------------------
 # Cached loaders
@@ -63,49 +118,40 @@ def load_config():
 
 @st.cache_resource(show_spinner="Loading artifacts…")
 def load_artifacts(dataset: str):
-    vec_path = Path(MODELS_DIR) / f"tfidf_{dataset}.pkl"
-    svd_path = Path(MODELS_DIR) / f"svd_{dataset}.pkl"
+    vec_path      = Path(MODELS_DIR) / f"tfidf_{dataset}.pkl"
+    svd_path      = Path(MODELS_DIR) / f"svd_{dataset}.pkl"
     X_reduced_path = Path(PROCESSED_DIR) / f"X_reduced_{dataset}.npy"
-
     if not vec_path.exists():
         return None
-
-    vectorizer = joblib.load(vec_path)
+    vectorizer   = joblib.load(vec_path)
     svd_pipeline = joblib.load(svd_path)
-    X_reduced = np.load(X_reduced_path) if X_reduced_path.exists() else None
-
-    # Load all saved cluster models for this dataset
-    models = {}
-    for pkl in Path(MODELS_DIR).glob(f"*_{dataset}_k*.pkl"):
-        models[pkl.stem] = joblib.load(pkl)
-
+    X_reduced    = np.load(X_reduced_path) if X_reduced_path.exists() else None
+    models = {pkl.stem: joblib.load(pkl)
+              for pkl in Path(MODELS_DIR).glob(f"*_{dataset}_k*.pkl")}
     return {"vectorizer": vectorizer, "svd_pipeline": svd_pipeline,
             "X_reduced": X_reduced, "models": models}
 
 
-@st.cache_data(show_spinner="Loading labels…")
+@st.cache_data(show_spinner=False)
 def load_labels(dataset: str, algorithm: str, k: int, suffix: str = "") -> np.ndarray | None:
-    key = f"{algorithm}_{dataset}_k{k}{('_' + suffix) if suffix else ''}"
+    key  = f"{algorithm}_{dataset}_k{k}{('_' + suffix) if suffix else ''}"
     path = Path(MODELS_DIR) / f"{key}.pkl"
     if not path.exists():
         return None
     model = joblib.load(path)
-    # AgglomerativeClustering has no predict; labels stored in .labels_
     if hasattr(model, "predict"):
         X = np.load(Path(PROCESSED_DIR) / f"X_reduced_{dataset}.npy")
         return model.predict(X)
     return model.labels_
 
 
-@st.cache_data(show_spinner="Loading metrics…")
+@st.cache_data(show_spinner=False)
 def load_metrics(dataset: str) -> pd.DataFrame | None:
     path = Path(REPORTS_DIR) / f"clustering_metrics_{dataset}.csv"
-    if path.exists():
-        return pd.read_csv(path)
-    return None
+    return pd.read_csv(path) if path.exists() else None
 
 
-@st.cache_data(show_spinner="Loading corpus…")
+@st.cache_data(show_spinner=False)
 def load_corpus(dataset: str) -> list[str] | None:
     import pickle
     path = Path(PROCESSED_DIR) / f"{dataset}_clean.pkl"
@@ -115,12 +161,46 @@ def load_corpus(dataset: str) -> list[str] | None:
     return None
 
 
+@st.cache_data(show_spinner=False)
+def load_cluster_names(dataset: str, algorithm: str, k: int, suffix: str = "") -> dict[int, str]:
+    from scipy.sparse import load_npz
+    from src.evaluation import get_top_terms, get_cluster_names
+
+    tfidf_path = Path(PROCESSED_DIR) / f"X_tfidf_{dataset}.npz"
+    labels = load_labels(dataset, algorithm, k, suffix)
+    arts   = load_artifacts(dataset)
+    if labels is None or arts is None or not tfidf_path.exists():
+        return {}
+    X_tfidf   = load_npz(str(tfidf_path))
+    top_terms = get_top_terms(labels, arts["vectorizer"], X_tfidf, n=5)
+    return get_cluster_names(top_terms, n_words=3)
+
+
+def cluster_label(cluster_id: int, names: dict[int, str]) -> str:
+    name = names.get(int(cluster_id), "")
+    return f"Cluster {cluster_id} — {name}" if name else f"Cluster {cluster_id}"
+
+
 # ---------------------------------------------------------------------------
-# Sidebar controls
+# Helper: best row per algorithm
+# ---------------------------------------------------------------------------
+
+def _best_per_algo(df: pd.DataFrame) -> pd.DataFrame:
+    rows = []
+    for algo in df["algorithm"].unique():
+        sub = df[df["algorithm"] == algo]
+        if "silhouette" in sub.columns and sub["silhouette"].notna().any():
+            rows.append(sub.loc[sub["silhouette"].idxmax()])
+    return pd.DataFrame(rows).reset_index(drop=True)
+
+
+# ---------------------------------------------------------------------------
+# Sidebar
 # ---------------------------------------------------------------------------
 
 def sidebar() -> dict:
-    st.sidebar.title("🔧 Controls")
+    st.sidebar.title("Controls")
+
     cfg = load_config()
 
     dataset = st.sidebar.selectbox(
@@ -131,10 +211,9 @@ def sidebar() -> dict:
     algorithm = st.sidebar.selectbox(
         "Algorithm",
         ["kmeans", "hierarchical", "gmm"],
-        format_func=lambda x: {"kmeans": "K-Means", "hierarchical": "Hierarchical", "gmm": "GMM"}[x],
+        format_func=lambda x: ALGO_LABELS[x],
     )
 
-    # k options depend on algo
     if algorithm == "kmeans":
         k_options = cfg["clustering"]["kmeans"]["k_range"]
     elif algorithm == "hierarchical":
@@ -142,222 +221,475 @@ def sidebar() -> dict:
     else:
         k_options = cfg["clustering"]["gmm"]["n_components"]
 
-    k = st.sidebar.selectbox("Number of Clusters (k)", k_options, index=1)
+    k = st.sidebar.selectbox("Number of Clusters (k)", k_options,
+                              index=min(1, len(k_options) - 1))
 
     suffix = ""
     if algorithm == "hierarchical":
         suffix = st.sidebar.selectbox("Linkage", cfg["clustering"]["hierarchical"]["linkage"])
     elif algorithm == "gmm":
-        suffix = st.sidebar.selectbox(
-            "Covariance Type", cfg["clustering"]["gmm"]["covariance_type"]
-        )
+        suffix = st.sidebar.selectbox("Covariance Type",
+                                       cfg["clustering"]["gmm"]["covariance_type"])
+
+    st.sidebar.markdown("---")
+    st.sidebar.markdown(
+        "**Datasets**\n\n"
+        "- 20 Newsgroups (18,846 docs, 20 topics)\n"
+        "- Wikipedia People (42,786 biographies)"
+    )
+    st.sidebar.markdown(
+        "**Pipeline**\n\n"
+        "TF-IDF (10k features, bigrams) → "
+        "TruncatedSVD (100d, L2-norm) → "
+        "K-Means / Hierarchical / GMM"
+    )
 
     return {"dataset": dataset, "algorithm": algorithm, "k": k, "suffix": suffix}
 
 
 # ---------------------------------------------------------------------------
-# Tabs
+# KPI bar
 # ---------------------------------------------------------------------------
 
-def tab_cluster_plot(params: dict, arts: dict):
-    st.subheader("Cluster Visualization (PCA 2-D)")
+def render_kpi_bar(dataset: str, arts: dict) -> None:
+    df = load_metrics(dataset)
+    corpus = load_corpus(dataset)
 
+    n_docs   = len(corpus) if corpus else (arts["X_reduced"].shape[0] if arts["X_reduced"] is not None else 0)
+    n_exps   = len(df) if df is not None else 0
+    best_sil = df["silhouette"].max() if df is not None and "silhouette" in df.columns else float("nan")
+    best_row = df.loc[df["silhouette"].idxmax()] if df is not None and not df.empty else None
+    best_lbl = (f"{ALGO_LABELS[best_row['algorithm']]} k={int(best_row['k'])}"
+                if best_row is not None else "—")
+
+    c1, c2, c3, c4, c5 = st.columns(5)
+    with c1:
+        st.markdown(f"""<div class="kpi-card">
+            <div class="label">Documents</div>
+            <div class="value">{n_docs:,}</div>
+            <div class="delta delta-info">in corpus</div>
+        </div>""", unsafe_allow_html=True)
+    with c2:
+        vocab = len(arts["vectorizer"].vocabulary_) if arts else 0
+        st.markdown(f"""<div class="kpi-card">
+            <div class="label">Vocabulary</div>
+            <div class="value">{vocab:,}</div>
+            <div class="delta delta-info">TF-IDF features</div>
+        </div>""", unsafe_allow_html=True)
+    with c3:
+        st.markdown(f"""<div class="kpi-card">
+            <div class="label">Experiments</div>
+            <div class="value">{n_exps}</div>
+            <div class="delta delta-info">total runs</div>
+        </div>""", unsafe_allow_html=True)
+    with c4:
+        st.markdown(f"""<div class="kpi-card">
+            <div class="label">Best Silhouette</div>
+            <div class="value">{best_sil:.4f}</div>
+            <div class="delta delta-good">higher is better</div>
+        </div>""", unsafe_allow_html=True)
+    with c5:
+        st.markdown(f"""<div class="kpi-card">
+            <div class="label">Best Model</div>
+            <div class="value" style="font-size:1.1rem;padding-top:0.4rem">{best_lbl}</div>
+            <div class="delta delta-good">by silhouette</div>
+        </div>""", unsafe_allow_html=True)
+
+
+# ---------------------------------------------------------------------------
+# Tab: Overview
+# ---------------------------------------------------------------------------
+
+def tab_overview(dataset: str, arts: dict) -> None:
+    df = load_metrics(dataset)
+    if df is None:
+        st.warning("No metrics found. Run the pipeline first.")
+        return
+
+    st.markdown('<div class="section-header">Algorithm Comparison — Best k per Method</div>',
+                unsafe_allow_html=True)
+
+    best_df = _best_per_algo(df)
+    col1, col2 = st.columns(2)
+
+    with col1:
+        fig = px.bar(
+            best_df,
+            x="algorithm",
+            y="silhouette",
+            color="algorithm",
+            color_discrete_map=ALGO_COLORS,
+            text=best_df["silhouette"].map("{:.4f}".format),
+            labels={"algorithm": "Algorithm", "silhouette": "Silhouette Score"},
+            title="Best Silhouette Score per Algorithm",
+            height=340,
+        )
+        fig.update_traces(textposition="outside", marker_line_width=0)
+        fig.update_layout(showlegend=False, plot_bgcolor="white",
+                          paper_bgcolor="white", yaxis_gridcolor="#f0f0f0",
+                          xaxis=dict(tickvals=best_df["algorithm"].tolist(),
+                                     ticktext=[ALGO_LABELS[a] for a in best_df["algorithm"]]))
+        st.plotly_chart(fig, use_container_width=True)
+
+    with col2:
+        fig2 = px.bar(
+            best_df,
+            x="algorithm",
+            y="davies_bouldin",
+            color="algorithm",
+            color_discrete_map=ALGO_COLORS,
+            text=best_df["davies_bouldin"].map("{:.3f}".format),
+            labels={"algorithm": "Algorithm", "davies_bouldin": "Davies-Bouldin Index"},
+            title="Best Davies-Bouldin Index (lower = better)",
+            height=340,
+        )
+        fig2.update_traces(textposition="outside", marker_line_width=0)
+        fig2.update_layout(showlegend=False, plot_bgcolor="white",
+                           paper_bgcolor="white", yaxis_gridcolor="#f0f0f0",
+                           xaxis=dict(tickvals=best_df["algorithm"].tolist(),
+                                      ticktext=[ALGO_LABELS[a] for a in best_df["algorithm"]]))
+        st.plotly_chart(fig2, use_container_width=True)
+
+    st.markdown('<div class="section-header">Silhouette Score vs. k (All Algorithms)</div>',
+                unsafe_allow_html=True)
+
+    fig3 = go.Figure()
+    for algo, grp in df.groupby("algorithm"):
+        g = grp.sort_values("k")
+        fig3.add_trace(go.Scatter(
+            x=g["k"], y=g["silhouette"],
+            mode="lines+markers",
+            name=ALGO_LABELS[algo],
+            line=dict(color=ALGO_COLORS[algo], width=2),
+            marker=dict(size=7),
+        ))
+    fig3.update_layout(
+        xaxis_title="Number of Clusters (k)",
+        yaxis_title="Silhouette Score",
+        title=f"Silhouette Score vs. k — {dataset}",
+        plot_bgcolor="white",
+        paper_bgcolor="white",
+        yaxis_gridcolor="#f0f0f0",
+        height=350,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+    )
+    st.plotly_chart(fig3, use_container_width=True)
+
+    st.markdown('<div class="section-header">Summary Table</div>', unsafe_allow_html=True)
+    display_cols = [c for c in ["algorithm", "k", "silhouette", "davies_bouldin",
+                                 "calinski_harabasz", "runtime_s"] if c in df.columns]
+    styled = (df[display_cols]
+              .rename(columns={"algorithm": "Algorithm", "k": "k",
+                                "silhouette": "Silhouette ↑",
+                                "davies_bouldin": "Davies-Bouldin ↓",
+                                "calinski_harabasz": "Calinski-Harabasz ↑",
+                                "runtime_s": "Runtime (s)"})
+              .style
+              .background_gradient(subset=["Silhouette ↑"], cmap="Blues")
+              .background_gradient(subset=["Davies-Bouldin ↓"], cmap="Reds_r")
+              .format({"Silhouette ↑": "{:.4f}", "Davies-Bouldin ↓": "{:.4f}",
+                       "Calinski-Harabasz ↑": "{:.1f}", "Runtime (s)": "{:.1f}"}))
+    st.dataframe(styled, use_container_width=True, hide_index=True)
+
+
+# ---------------------------------------------------------------------------
+# Tab: Cluster Map
+# ---------------------------------------------------------------------------
+
+def tab_cluster_plot(params: dict, arts: dict) -> None:
     labels = load_labels(params["dataset"], params["algorithm"], params["k"], params["suffix"])
     if labels is None:
-        st.warning("No saved model found for this configuration. Run the pipeline first.")
+        st.warning("No saved model found for this configuration.")
         return
     if arts["X_reduced"] is None:
         st.warning("Reduced feature matrix not found.")
         return
 
+    names = load_cluster_names(params["dataset"], params["algorithm"],
+                                params["k"], params["suffix"])
+
     from sklearn.decomposition import PCA
-    X = arts["X_reduced"]
-    pca = PCA(n_components=2, random_state=42)
+    X    = arts["X_reduced"]
+    pca  = PCA(n_components=2, random_state=42)
     coords = pca.fit_transform(X)
 
     corpus = load_corpus(params["dataset"])
-    hover_text = (
-        [c[:120] for c in corpus] if corpus and len(corpus) == len(labels)
-        else [f"doc {i}" for i in range(len(labels))]
-    )
+    hover_text = ([c[:120] for c in corpus]
+                  if corpus and len(corpus) == len(labels)
+                  else [f"doc {i}" for i in range(len(labels))])
+
+    cluster_labels_named = [cluster_label(c, names) for c in labels]
 
     df_plot = pd.DataFrame({
-        "PC1": coords[:, 0],
-        "PC2": coords[:, 1],
-        "Cluster": labels.astype(str),
-        "Preview": hover_text,
+        "PC1": coords[:, 0], "PC2": coords[:, 1],
+        "Cluster": cluster_labels_named, "Preview": hover_text,
     })
 
-    fig = px.scatter(
-        df_plot, x="PC1", y="PC2",
-        color="Cluster",
-        hover_data={"Preview": True, "PC1": False, "PC2": False},
-        opacity=0.6,
-        title=f"PCA — {params['algorithm'].upper()} k={params['k']} — {params['dataset']}",
-        height=600,
-    )
-    fig.update_traces(marker=dict(size=4))
-    st.plotly_chart(fig, use_container_width=True)
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        fig = px.scatter(
+            df_plot, x="PC1", y="PC2",
+            color="Cluster",
+            hover_data={"Preview": True, "PC1": False, "PC2": False},
+            opacity=0.55,
+            title=(f"PCA Projection — {ALGO_LABELS[params['algorithm']]} "
+                   f"k={params['k']} — {params['dataset']}"),
+            height=560,
+        )
+        fig.update_traces(marker=dict(size=4, line=dict(width=0)))
+        fig.update_layout(plot_bgcolor="white", paper_bgcolor="white",
+                          legend=dict(font=dict(size=10)))
+        st.plotly_chart(fig, use_container_width=True)
+        var = pca.explained_variance_ratio_
+        st.caption(f"PC1: {var[0]:.1%} variance explained  |  PC2: {var[1]:.1%} variance explained")
 
-    var = pca.explained_variance_ratio_
-    st.caption(f"PC1: {var[0]:.1%} variance  |  PC2: {var[1]:.1%} variance")
+    with col2:
+        st.markdown("**Cluster Names**")
+        if names:
+            for cid, n in sorted(names.items()):
+                st.markdown(f"`{cid}` {n}")
+        st.markdown("---")
+        n_per_cluster = pd.Series(labels).value_counts().sort_index()
+        st.markdown("**Cluster Sizes**")
+        size_df = pd.DataFrame({"Cluster": n_per_cluster.index,
+                                 "Docs": n_per_cluster.values})
+        fig_sz = px.bar(size_df, x="Cluster", y="Docs",
+                        color_discrete_sequence=["#2563eb"], height=280)
+        fig_sz.update_layout(showlegend=False, plot_bgcolor="white",
+                              paper_bgcolor="white", margin=dict(l=0, r=0, t=20, b=0))
+        st.plotly_chart(fig_sz, use_container_width=True)
 
 
-def tab_cluster_explorer(params: dict, arts: dict):
-    st.subheader("Cluster Explorer — Top Terms & Sample Documents")
+# ---------------------------------------------------------------------------
+# Tab: Cluster Explorer
+# ---------------------------------------------------------------------------
 
+def tab_cluster_explorer(params: dict, arts: dict) -> None:
     labels = load_labels(params["dataset"], params["algorithm"], params["k"], params["suffix"])
     if labels is None:
-        st.warning("No saved model found. Run the pipeline first.")
+        st.warning("No saved model found.")
         return
 
-    cluster_ids = sorted(set(labels))
-    selected_cluster = st.selectbox("Select Cluster", cluster_ids)
+    names = load_cluster_names(params["dataset"], params["algorithm"],
+                                params["k"], params["suffix"])
 
-    # Top terms
+    cluster_ids = sorted(set(labels))
+    selected_cluster = st.selectbox(
+        "Select Cluster",
+        cluster_ids,
+        format_func=lambda cid: cluster_label(cid, names),
+    )
+
+    n_in = int((labels == selected_cluster).sum())
+    pct  = n_in / len(labels) * 100
+    if names and int(selected_cluster) in names:
+        st.info(f"**{cluster_label(selected_cluster, names)}**  ·  "
+                f"{n_in:,} documents ({pct:.1f}% of corpus)")
+
     from scipy.sparse import load_npz
     tfidf_path = Path(PROCESSED_DIR) / f"X_tfidf_{params['dataset']}.npz"
+
+    col1, col2 = st.columns([2, 1])
     if tfidf_path.exists():
         X_tfidf = load_npz(str(tfidf_path))
         from src.evaluation import get_top_terms
         top_terms = get_top_terms(labels, arts["vectorizer"], X_tfidf, n=15)
         terms = top_terms.get(int(selected_cluster), [])
 
-        if terms:
-            col1, col2 = st.columns([2, 1])
-            with col1:
-                st.markdown("**Top Terms**")
+        with col1:
+            if terms:
+                st.markdown("**Top TF-IDF Terms**")
+                term_df = pd.DataFrame({
+                    "Term": terms[::-1],
+                    "Rank": list(range(len(terms), 0, -1)),
+                })
                 fig = px.bar(
-                    x=terms[::-1], y=list(range(len(terms)))[::-1],
+                    term_df, x="Rank", y="Term",
                     orientation="h",
-                    labels={"x": "Term", "y": "Rank"},
-                    height=400,
+                    color="Rank",
+                    color_continuous_scale="Blues",
+                    height=420,
+                    labels={"Rank": "Importance rank"},
                 )
-                fig.update_layout(yaxis=dict(tickvals=list(range(len(terms))),
-                                             ticktext=[str(i+1) for i in range(len(terms))]))
+                fig.update_layout(showlegend=False, coloraxis_showscale=False,
+                                   plot_bgcolor="white", paper_bgcolor="white",
+                                   margin=dict(l=0, r=0, t=10, b=0))
                 st.plotly_chart(fig, use_container_width=True)
-            with col2:
+
+        with col2:
+            if terms:
                 st.markdown("**Term List**")
                 for i, t in enumerate(terms, 1):
                     st.write(f"{i}. `{t}`")
 
-    # Sample documents
     corpus = load_corpus(params["dataset"])
     if corpus and len(corpus) == len(labels):
         from src.evaluation import get_cluster_examples
-        examples = get_cluster_examples(labels, corpus, n=5, snippet_len=300)
+        examples = get_cluster_examples(labels, corpus, n=5, snippet_len=350)
         docs = examples.get(int(selected_cluster), [])
         st.markdown("**Sample Documents**")
         for i, doc in enumerate(docs, 1):
             with st.expander(f"Document {i}"):
                 st.write(doc)
 
-    # Cluster size info
-    n_in_cluster = int((labels == selected_cluster).sum())
-    st.metric("Documents in this cluster", f"{n_in_cluster:,}", delta=None)
 
+# ---------------------------------------------------------------------------
+# Tab: Metrics
+# ---------------------------------------------------------------------------
 
-def tab_metrics(params: dict):
-    st.subheader("Evaluation Metrics")
-
+def tab_metrics(params: dict) -> None:
     df = load_metrics(params["dataset"])
     if df is None:
-        st.warning("No metrics file found. Run the pipeline first.")
+        st.warning("No metrics file found.")
         return
 
-    col1, col2 = st.columns(2)
+    metric_opts = [c for c in ["silhouette", "davies_bouldin", "calinski_harabasz"]
+                   if c in df.columns]
+
+    col1, col2 = st.columns([1, 1])
 
     with col1:
-        st.markdown("#### All Experiments")
-        cols_to_show = [c for c in
-                        ["algorithm", "k", "silhouette", "davies_bouldin",
-                         "calinski_harabasz", "runtime_s"]
-                        if c in df.columns]
-        styled = df[cols_to_show].style.background_gradient(
-            subset=["silhouette"], cmap="RdYlGn"
-        ).format({"silhouette": "{:.4f}", "davies_bouldin": "{:.4f}",
-                  "calinski_harabasz": "{:.1f}", "runtime_s": "{:.1f}s"})
-        st.dataframe(styled, use_container_width=True, height=400)
+        st.markdown("**All Experiments**")
+        cols_to_show = [c for c in ["algorithm", "k", "silhouette", "davies_bouldin",
+                                     "calinski_harabasz", "runtime_s"] if c in df.columns]
+        styled = (df[cols_to_show]
+                  .style
+                  .background_gradient(subset=["silhouette"], cmap="RdYlGn")
+                  .format({"silhouette": "{:.4f}", "davies_bouldin": "{:.4f}",
+                            "calinski_harabasz": "{:.1f}", "runtime_s": "{:.1f}"}))
+        st.dataframe(styled, use_container_width=True, height=380, hide_index=True)
 
     with col2:
-        metric = st.selectbox(
-            "Metric to visualise",
-            ["silhouette", "davies_bouldin", "calinski_harabasz"],
-        )
-        fig = px.line(
-            df.sort_values(["algorithm", "k"]),
-            x="k", y=metric,
-            color="algorithm",
-            markers=True,
+        metric = st.selectbox("Metric to visualise", metric_opts)
+        higher = metric != "davies_bouldin"
+        note   = "(higher = better)" if higher else "(lower = better)"
+
+        fig = go.Figure()
+        for algo, grp in df.groupby("algorithm"):
+            g = grp.sort_values("k")
+            fig.add_trace(go.Scatter(
+                x=g["k"], y=g[metric],
+                mode="lines+markers",
+                name=ALGO_LABELS[algo],
+                line=dict(color=ALGO_COLORS[algo], width=2),
+                marker=dict(size=7),
+            ))
+        fig.update_layout(
+            xaxis_title="k",
+            yaxis_title=f"{metric.replace('_', ' ').title()} {note}",
             title=f"{metric.replace('_', ' ').title()} vs. k",
-            height=400,
+            plot_bgcolor="white", paper_bgcolor="white",
+            yaxis_gridcolor="#f0f0f0", height=380,
+            legend=dict(orientation="h", y=1.05),
         )
         st.plotly_chart(fig, use_container_width=True)
 
-    # Best model highlight
     if "silhouette" in df.columns:
         best = df.loc[df["silhouette"].idxmax()]
         st.success(
-            f"**Best model:** {best['algorithm'].upper()} k={int(best['k'])}  "
-            f"— Silhouette = {best['silhouette']:.4f}"
+            f"**Best overall:** {ALGO_LABELS[best['algorithm']]} k={int(best['k'])}  "
+            f"— Silhouette = {best['silhouette']:.4f}  "
+            f"| Davies-Bouldin = {best['davies_bouldin']:.4f}"
         )
 
+    if "inertia" in df.columns:
+        kmeans_df = df[df["algorithm"] == "kmeans"].sort_values("k")
+        if not kmeans_df.empty:
+            st.markdown("**K-Means Elbow Curve**")
+            fig_elbow = px.line(kmeans_df, x="k", y="inertia",
+                                markers=True, height=300,
+                                labels={"inertia": "Inertia (WSS)", "k": "k"},
+                                title="K-Means Inertia vs. k")
+            fig_elbow.update_traces(line=dict(color="#2563eb", width=2), marker=dict(size=7))
+            fig_elbow.update_layout(plot_bgcolor="white", paper_bgcolor="white",
+                                    yaxis_gridcolor="#f0f0f0")
+            st.plotly_chart(fig_elbow, use_container_width=True)
 
-def tab_predict(params: dict, arts: dict):
-    st.subheader("Predict Cluster for New Document")
 
-    user_text = st.text_area(
-        "Paste or type your document here:",
-        height=180,
-        placeholder="Enter any text and discover which cluster it belongs to…",
-    )
+# ---------------------------------------------------------------------------
+# Tab: Predict
+# ---------------------------------------------------------------------------
 
-    if st.button("Predict Cluster", type="primary"):
-        if not user_text.strip():
-            st.warning("Please enter some text.")
-            return
+def tab_predict(params: dict, arts: dict) -> None:
+    col_input, col_result = st.columns([1, 1])
 
-        cleaned = preprocess_text(user_text)
-        if not cleaned.strip():
-            st.error("Text became empty after preprocessing (too many stop words / short).")
-            return
+    with col_input:
+        st.markdown("**Enter document text**")
+        user_text = st.text_area(
+            "Text",
+            height=200,
+            label_visibility="collapsed",
+            placeholder="Paste any text — article, description, paragraph — and discover which cluster it belongs to.",
+        )
 
-        X_new = transform_new_docs([cleaned], arts["vectorizer"], arts["svd_pipeline"])
+        algo    = params["algorithm"]
+        k       = params["k"]
+        suffix  = params["suffix"]
+        key     = f"{algo}_{params['dataset']}_k{k}" + (f"_{suffix}" if suffix else "")
 
-        # Build model key
-        k = params["k"]
-        algo = params["algorithm"]
-        suffix = params["suffix"]
-        key = f"{algo}_{params['dataset']}_k{k}" + (f"_{suffix}" if suffix else "")
+        predict_clicked = st.button("Predict Cluster", type="primary", use_container_width=True)
 
-        if key not in arts["models"]:
-            st.error(f"Model `{key}` not found. Available: {sorted(arts['models'].keys())}")
-            return
+    with col_result:
+        if predict_clicked:
+            if not user_text.strip():
+                st.warning("Please enter some text.")
+                return
 
-        model = arts["models"][key]
-        cluster_id = int(model.predict(X_new)[0])
+            cleaned = preprocess_text(user_text)
+            if not cleaned.strip():
+                st.error("Text became empty after preprocessing.")
+                return
 
-        st.success(f"**Predicted Cluster: {cluster_id}**")
+            X_new = transform_new_docs([cleaned], arts["vectorizer"], arts["svd_pipeline"])
 
-        # Show confidence for GMM
-        if algo == "gmm":
-            probs = model.predict_proba(X_new)[0]
-            confidence = float(probs[cluster_id])
-            st.metric("Confidence (GMM probability)", f"{confidence:.2%}")
+            if key not in arts["models"]:
+                st.error(f"Model `{key}` not found.")
+                return
 
-        # Show top terms for that cluster
-        from scipy.sparse import load_npz
-        tfidf_path = Path(PROCESSED_DIR) / f"X_tfidf_{params['dataset']}.npz"
-        if tfidf_path.exists():
-            labels = load_labels(params["dataset"], algo, k, suffix)
-            if labels is not None:
-                X_tfidf = load_npz(str(tfidf_path))
-                from src.evaluation import get_top_terms
-                top_terms = get_top_terms(labels, arts["vectorizer"], X_tfidf, n=15)
-                terms = top_terms.get(cluster_id, [])
-                if terms:
-                    st.markdown("**Top Terms for this Cluster:**")
-                    st.write("  ".join([f"`{t}`" for t in terms]))
+            model      = arts["models"][key]
+            cluster_id = int(model.predict(X_new)[0])
+            names      = load_cluster_names(params["dataset"], algo, k, suffix)
+            label      = cluster_label(cluster_id, names)
+
+            st.success(f"**Predicted: {label}**")
+
+            if algo == "gmm":
+                probs      = model.predict_proba(X_new)[0]
+                confidence = float(probs[cluster_id])
+                st.metric("GMM Confidence", f"{confidence:.2%}")
+
+                prob_df = pd.DataFrame({
+                    "Cluster": [cluster_label(i, names) for i in range(len(probs))],
+                    "Probability": probs,
+                }).sort_values("Probability", ascending=False)
+                fig_probs = px.bar(
+                    prob_df.head(10), x="Probability", y="Cluster",
+                    orientation="h", height=320,
+                    color="Probability", color_continuous_scale="Blues",
+                    title="Top-10 Cluster Probabilities",
+                )
+                fig_probs.update_layout(showlegend=False, coloraxis_showscale=False,
+                                         plot_bgcolor="white", paper_bgcolor="white",
+                                         yaxis=dict(autorange="reversed"))
+                st.plotly_chart(fig_probs, use_container_width=True)
+            else:
+                from scipy.sparse import load_npz
+                tfidf_path = Path(PROCESSED_DIR) / f"X_tfidf_{params['dataset']}.npz"
+                labels_arr = load_labels(params["dataset"], algo, k, suffix)
+                if labels_arr is not None and tfidf_path.exists():
+                    X_tfidf = load_npz(str(tfidf_path))
+                    from src.evaluation import get_top_terms
+                    top_terms = get_top_terms(labels_arr, arts["vectorizer"], X_tfidf, n=12)
+                    terms = top_terms.get(cluster_id, [])
+                    if terms:
+                        st.markdown("**Cluster Top Terms:**")
+                        st.write("  ".join([f"`{t}`" for t in terms]))
+
+            if names:
+                with st.expander("All clusters in this model"):
+                    for cid in sorted(names):
+                        marker = "👉 " if cid == cluster_id else ""
+                        st.write(f"{marker}**{cluster_label(cid, names)}**")
 
 
 # ---------------------------------------------------------------------------
@@ -365,36 +697,47 @@ def tab_predict(params: dict, arts: dict):
 # ---------------------------------------------------------------------------
 
 def main():
-    st.title("🔍 Document Clustering Explorer")
-    st.markdown(
-        "Explore unsupervised clustering of **20 Newsgroups** and **Wikipedia People** "
-        "datasets using K-Means, Hierarchical Clustering, and Gaussian Mixture Models."
-    )
+    dataset_display = {"newsgroups": "20 Newsgroups", "wikipedia": "Wikipedia People"}
 
     params = sidebar()
-    arts = load_artifacts(params["dataset"])
+    arts   = load_artifacts(params["dataset"])
+
+    st.markdown(f"""
+    <div class="main-header">
+        <h1>Document Clustering Explorer</h1>
+        <p>Unsupervised clustering of <strong>{dataset_display[params['dataset']]}</strong>
+           documents using K-Means, Hierarchical, and Gaussian Mixture Models
+           with TF-IDF + LSA features.</p>
+    </div>
+    """, unsafe_allow_html=True)
 
     if arts is None:
         st.error(
             f"No trained artifacts found for **{params['dataset']}**.\n\n"
-            "Run the pipeline first:\n```bash\npython run_pipeline.py\n```"
+            "Run the pipeline:\n```bash\npython run_pipeline.py\n```"
         )
         st.stop()
 
-    tab1, tab2, tab3, tab4 = st.tabs([
-        "📊 Cluster Plot",
-        "🔎 Cluster Explorer",
-        "📈 Metrics",
-        "🧠 Predict",
+    render_kpi_bar(params["dataset"], arts)
+    st.markdown("")
+
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        "Overview",
+        "Cluster Map",
+        "Cluster Explorer",
+        "Metrics",
+        "Predict",
     ])
 
     with tab1:
-        tab_cluster_plot(params, arts)
+        tab_overview(params["dataset"], arts)
     with tab2:
-        tab_cluster_explorer(params, arts)
+        tab_cluster_plot(params, arts)
     with tab3:
-        tab_metrics(params)
+        tab_cluster_explorer(params, arts)
     with tab4:
+        tab_metrics(params)
+    with tab5:
         tab_predict(params, arts)
 
 

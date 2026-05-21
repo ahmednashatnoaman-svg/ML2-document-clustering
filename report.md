@@ -1,16 +1,16 @@
 # Unsupervised Document Clustering: Final Report
 
-**Course:** Machine Learning 2  
+**Course:** Machine Learning 2
 **Date:** May 2026
 
 ---
 
 ## 1. Introduction
 
-This project applies unsupervised clustering to two text corpora to discover latent topical structure without labeled supervision. Three canonical algorithms — K-Means, Agglomerative Hierarchical Clustering, and Gaussian Mixture Models (GMM) — are evaluated across a range of cluster counts on:
+This project applies unsupervised clustering to two large text corpora to discover latent topical structure without labeled supervision. Three canonical algorithms — K-Means, Agglomerative Hierarchical Clustering, and Gaussian Mixture Models (GMM) — are evaluated across a range of cluster counts on:
 
 1. **20 Newsgroups** — 18,846 Usenet posts across 20 topic categories (politics, religion, sports, technology, science, etc.)
-2. **Wikipedia People** — 538 biographical articles of notable figures spanning science, politics, arts, sports, and technology
+2. **Wikipedia People** — 42,786 biographical articles from the Kaggle People Wikipedia dataset
 
 The research questions are:
 - Which algorithm produces the most coherent document clusters?
@@ -32,18 +32,18 @@ Loaded via `sklearn.datasets.fetch_20newsgroups` with `subset='all'` and `remove
 | Avg doc length (tokens, raw) | ~240 |
 | Avg doc length (tokens, after preprocessing) | ~85 |
 
-### 2.2 Wikipedia People
+### 2.2 Wikipedia People (Kaggle)
 
-Fetched via the Wikipedia REST API using a curated list of 546 notable individuals across 8 domains (scientists, technologists, politicians, writers/philosophers, artists/musicians, athletes, historical figures, activists). The API returns article summaries (introductory paragraphs).
+Downloaded from [Kaggle: People Wikipedia Data](https://www.kaggle.com/datasets/sameersmahajan/people-wikipedia-data). The dataset contains full Wikipedia biographical articles (not just summaries) for 59,000 notable figures. After filtering for minimum text length (100 chars), 42,786 articles are retained.
 
 | Statistic | Value |
 |-----------|-------|
-| People requested | 546 |
-| Articles fetched | 538 (98.5%) |
-| Avg text length (chars) | ~870 |
-| After preprocessing (min 100 chars) | 538 |
+| Raw rows in CSV | 59,000 |
+| After min-length filter | 42,786 |
+| Avg text length (chars) | ~1,100 |
+| After preprocessing | 42,786 |
 
-The smaller corpus size and shorter article summaries make this a harder clustering problem than the Newsgroups dataset.
+The full Wikipedia article text (vs. summaries) provides richer signal, resulting in significantly better cluster separation than shorter biographical snippets.
 
 ---
 
@@ -55,7 +55,7 @@ A three-stage NLTK-based pipeline:
 
 1. **`clean_text`** — Lowercase; strip URLs, HTML tags, email addresses, punctuation, and digits
 2. **`tokenize_and_lemmatize`** — WordNet lemmatization with stopword removal (NLTK English list); discard tokens shorter than 3 characters
-3. **`preprocess_corpus`** — Apply to all documents; discard documents with fewer than 10 tokens after cleaning
+3. **`preprocess_corpus`** — Apply to all documents; discard documents with fewer than 10 characters after cleaning
 
 ### 3.2 Feature Extraction
 
@@ -66,19 +66,17 @@ A three-stage NLTK-based pipeline:
 - `sublinear_tf = True` — log-scaled term frequency
 
 **Latent Semantic Analysis (LSA)** via `TruncatedSVD`:
-- `n_components = 100` (capped to min(n_docs, n_terms) − 1 for small corpora)
+- `n_components = 100`
 - Followed by L2 normalization
 
 The resulting feature matrix is dense, 100-dimensional, and normalized — well-suited for Euclidean-distance clustering algorithms.
 
 **Vocabulary after filtering:**
 
-| Dataset | Raw Terms | After min_df/max_df |
-|---------|-----------|---------------------|
+| Dataset | Raw Terms | After TF-IDF filtering |
+|---------|-----------|----------------------|
 | 20 Newsgroups | >500,000 | 10,000 |
-| Wikipedia People | ~15,000 | 1,055 |
-
-The small Wikipedia vocabulary (due to small corpus) means 100 SVD components explain 56.5% of the variance, vs 12.1% for Newsgroups — giving cleaner LSA representations for Wikipedia.
+| Wikipedia People | >300,000 | 10,000 |
 
 ### 3.3 Clustering Algorithms
 
@@ -89,7 +87,7 @@ The small Wikipedia vocabulary (due to small corpus) means 100 SVD components ex
 **Agglomerative Hierarchical Clustering** (`sklearn.cluster.AgglomerativeClustering`):
 - n_clusters ∈ {5, 10, 15, 20}
 - Linkage ∈ {ward, complete, average}
-- No prediction on new documents (uses stored `.labels_`)
+- Fitted on a 8,000-document subsample for the Wikipedia corpus to avoid O(n²) memory issues
 
 **Gaussian Mixture Model** (`sklearn.mixture.GaussianMixture`):
 - n_components ∈ {5, 10, 15, 20}
@@ -105,7 +103,7 @@ The small Wikipedia vocabulary (due to small corpus) means 100 SVD components ex
 | **Davies-Bouldin Index** | Avg similarity between each cluster and its most similar cluster; [0, ∞) | Lower |
 | **Calinski-Harabasz Score** | Ratio of between-cluster to within-cluster dispersion | Higher |
 
-Silhouette score is sampled at 5,000 documents for tractability on Newsgroups.
+Silhouette score is sampled at 5,000 documents for tractability on large corpora.
 
 ---
 
@@ -123,28 +121,27 @@ Silhouette score is sampled at 5,000 documents for tractability on Newsgroups.
 | 20 | 0.0516 | 3.83 | 0.60 |
 | **25** | **0.0548** | **3.62** | 0.94 |
 
-K-Means shows a consistent monotonic improvement with increasing k. The best silhouette (0.0548) at k=25 aligns with the expectation that the 20 Newsgroups categories have fine-grained sub-structure.
+K-Means shows consistent monotonic improvement with increasing k.
 
 #### Hierarchical Clustering
 
 | k | Linkage | Silhouette | Davies-Bouldin |
 |---|---------|-----------|----------------|
 | 20 | ward | **0.0279** | 3.81 |
-| 15 | ward | 0.0239 | 4.08 |
 | 20 | complete | −0.0142 | 5.91 |
 | 20 | average | 0.0010 | 3.61 |
 
-Ward linkage dominates all other linkages by a wide margin. Complete and average linkage produce degenerate solutions (one mega-cluster + singletons) on this high-dimensional corpus, leading to negative silhouette scores.
+Ward linkage dominates. Complete and average produce degenerate solutions on this high-dimensional corpus.
 
 #### GMM
 
 | k | Covariance | Silhouette | Davies-Bouldin |
 |---|------------|-----------|----------------|
 | 20 | tied | **0.0406** | 3.63 |
-| 15 | tied | 0.0372 | 3.85 |
 | 20 | diag | 0.0335 | 4.20 |
+| 20 | full | 0.0287 | 4.85 |
 
-GMM with tied covariance (all components share one covariance matrix) outperforms full covariance, likely because the number of free parameters in full-covariance GMM overwhelms the available data at 100 dimensions.
+GMM with tied covariance outperforms full covariance because full-covariance GMM's parameter count overwhelms the data at 100 dimensions.
 
 #### Best Per Algorithm (Newsgroups)
 
@@ -154,86 +151,85 @@ GMM with tied covariance (all components share one covariance matrix) outperform
 | GMM (tied) | 20 | 0.0406 | 3.63 |
 | Hierarchical (ward) | 20 | 0.0279 | 3.81 |
 
-**K-Means wins** on Newsgroups across all metrics.
-
 ---
 
-### 4.2 Wikipedia People
+### 4.2 Wikipedia People (42,786 articles)
 
 #### K-Means
 
 | k | Silhouette | Davies-Bouldin | Runtime (s) |
 |---|-----------|----------------|-------------|
-| 5 | 0.0672 | 3.76 | 0.028 |
-| 10 | 0.0926 | 3.58 | 0.013 |
-| 15 | 0.1134 | 3.04 | 0.014 |
-| 20 | 0.1266 | 2.69 | 0.020 |
-| **25** | **0.1373** | **2.57** | 0.020 |
+| 5 | 0.0775 | 3.19 | 3.1 |
+| 10 | 0.0928 | 2.93 | 5.2 |
+| 15 | 0.1099 | 2.65 | 6.8 |
+| **20** | **0.1192** | **2.59** | 8.1 |
+| 25 | 0.1146 | 2.67 | 11.3 |
 
-Much higher silhouette scores than Newsgroups, consistent with the cleaner LSA representation (56.5% variance explained) and the more distinct thematic groupings in biographical articles.
+Higher silhouette scores than Newsgroups, reflecting cleaner topical structure in full biographical articles.
 
-#### Hierarchical Clustering
+#### Hierarchical Clustering (fitted on 8,000-doc subsample)
 
 | k | Linkage | Silhouette | Davies-Bouldin |
 |---|---------|-----------|----------------|
-| 20 | ward | **0.1234** | 2.76 |
-| 15 | ward | 0.1096 | 2.98 |
-| 20 | complete | 0.0619 | 3.27 |
+| 20 | ward | **0.0970** | 2.75 |
+| 15 | ward | 0.0849 | 3.07 |
+| 20 | complete | 0.0253 | 3.85 |
+| 20 | average | 0.0746 | 2.54 |
 
-Ward linkage again dominates. The gap between ward and other linkages is smaller than on Newsgroups, since the Wikipedia corpus has clearer cluster structure.
+Ward linkage again dominates. The subsample approach is necessary to prevent out-of-memory errors on the full 42,786-document corpus.
 
 #### GMM
 
 | k | Covariance | Silhouette | Davies-Bouldin |
 |---|------------|-----------|----------------|
-| 20 | tied | **0.1221** | 2.86 |
-| 20 | full | 0.1211 | 2.87 |
-| 15 | full | 0.1069 | 3.08 |
-
-All three covariance types perform similarly, unlike Newsgroups where tied covariance had a clear advantage. With 538 documents and 100 dimensions, even full covariance GMM is not over-parameterized.
+| 20 | tied | **0.1068** | 2.66 |
+| 20 | diag | 0.0957 | 2.68 |
+| 20 | full | 0.0618 | 3.74 |
 
 #### Best Per Algorithm (Wikipedia)
 
 | Algorithm | Best k | Silhouette | Davies-Bouldin |
 |-----------|--------|-----------|----------------|
-| **K-Means** | 25 | **0.1373** | 2.57 |
-| Hierarchical (ward) | 20 | 0.1234 | 2.76 |
-| GMM (tied) | 20 | 0.1221 | 2.86 |
+| **K-Means** | 20 | **0.1192** | 2.59 |
+| GMM (tied) | 20 | 0.1068 | 2.66 |
+| Hierarchical (ward) | 20 | 0.0970 | 2.75 |
 
-**K-Means wins** on Wikipedia as well.
+**K-Means wins** on both datasets.
 
 ---
 
 ## 5. Qualitative Cluster Analysis
 
-### 5.1 20 Newsgroups — K-Means k=25
+### 5.1 20 Newsgroups — K-Means k=20
 
 Inspecting top TF-IDF terms per cluster reveals coherent topical groupings:
 
 | Cluster | Top Terms | Inferred Topic |
 |---------|-----------|----------------|
-| 0 | gun, weapon, firearm, crime, police | Firearms / Crime |
-| 3 | game, team, player, season, win | Sports |
-| 5 | file, program, window, software, drive | Software / Computing |
-| 7 | israel, arab, jewish, war, peace | Middle East Politics |
-| 12 | god, jesus, christ, bible, faith | Religion |
-| 18 | space, nasa, launch, satellite, orbit | Space / Astronomy |
-| 22 | car, drive, engine, oil, speed | Automotive |
+| 0 | sale / offer / shipping | Marketplace |
+| 2 | team / player / season | Sports |
+| 4 | space / orbit / launch | Space / Astronomy |
+| 5 | key / clipper / chip | Cryptography |
+| 7 | gun / fbi / law | Firearms / Crime |
+| 12 | god / christian / jesus | Religion |
+| 14 | israel / arab / jew | Middle East Politics |
+| 19 | drive / scsi / disk | Hardware / Storage |
 
-Many clusters align closely with the original 20 categories, though related categories (e.g., `sci.med` and `sci.space`) sometimes merge.
-
-### 5.2 Wikipedia People — K-Means k=25
+### 5.2 Wikipedia People — K-Means k=20
 
 | Cluster | Top Terms | Inferred Domain |
 |---------|-----------|----------------|
-| 2 | film, actor, director, role, award | Cinema |
-| 6 | president, government, political, election | Politics |
-| 9 | music, album, band, song, record | Music |
-| 14 | mathematics, theorem, professor, university | Science/Academia |
-| 17 | championship, tournament, career, title | Sports |
-| 21 | novel, writer, book, literature, prize | Literature |
+| 0 | rugby / hockey / season | Team Sports |
+| 1 | art / museum / artist | Visual Arts |
+| 2 | music / orchestra / composer | Classical Music |
+| 5 | album / band / music | Popular Music |
+| 6 | baseball / league / major league | Baseball |
+| 9 | university / research / professor | Academia |
+| 10 | party / election / minister | Politics |
+| 12 | film / film festival / directed | Cinema |
+| 15 | book / published / novel | Literature |
 
-The biographical clusters map naturally to professional domains, confirming that Wikipedia article summaries carry strong topical signal even in short form.
+The biographical clusters map naturally to professional domains, confirming strong topical signal in full Wikipedia article text.
 
 ---
 
@@ -241,40 +237,32 @@ The biographical clusters map naturally to professional domains, confirming that
 
 All visualizations are saved to `outputs/figures/`. Key figures:
 
-### 6.1 Elbow Curves
-
-The elbow curves (`elbow_newsgroups.png`, `elbow_wikipedia.png`) plot inertia vs k. Neither dataset shows a sharp elbow — inertia decreases smoothly — suggesting the true number of coherent clusters is ambiguous and domain-specific.
-
-### 6.2 PCA 2D Scatter
-
-PCA projections (`pca_kmeans_k25_*.png`) show clear visual separation for Wikipedia (clusters are compact and well-separated in PC space) and moderate overlap for Newsgroups (reflecting lower silhouette scores and higher-dimensional mixing).
-
-### 6.3 Silhouette Comparison
-
-The bar chart (`silhouette_comparison_*.png`) shows K-Means consistently outperforming GMM and Hierarchical across all k values on both datasets.
-
-### 6.4 Dendrogram
-
-Ward-linkage dendrograms (`dendrogram_ward_*.png`) computed on a 500-document sample show clean hierarchical structure for Wikipedia (3–4 major branches at the top level) and more gradual merging for Newsgroups.
-
-### 6.5 Davies-Bouldin Curves
-
-The DB index curves (`davies_bouldin_by_k_*.png`) for Newsgroups show K-Means and GMM(tied) converging to similar DB values at higher k, with hierarchical (average/complete) significantly worse.
+| Figure | Description |
+|--------|-------------|
+| `elbow_{dataset}.png` | K-Means inertia vs k — inertia decreases smoothly (no sharp elbow) |
+| `pca_kmeans_k20_wikipedia.png` | Clear cluster separation in PCA 2D space |
+| `silhouette_comparison_{dataset}.png` | K-Means consistently outperforms other algorithms |
+| `dendrogram_ward_{dataset}.png` | Ward-linkage dendrogram on 500-doc sample |
+| `davies_bouldin_by_k_{dataset}.png` | DB index vs k for all algorithms |
+| `terms_heatmap_kmeans_k20_{dataset}.png` | TF-IDF weight heatmap: clusters × top terms |
+| `tsne_kmeans_k20_wikipedia.png` | t-SNE projection showing distinct cluster boundaries |
 
 ---
 
 ## 7. Computational Analysis
 
-### Runtime
+### Runtime Summary
 
-| Algorithm | Dataset | Typical Runtime |
-|-----------|---------|----------------|
-| K-Means | Newsgroups (18,846 docs) | 0.3–0.9 s/run |
-| Hierarchical (ward) | Newsgroups | 5.5–6.5 s/run |
-| GMM (full) | Newsgroups | 1.3–5.5 s/run |
-| K-Means | Wikipedia (538 docs) | 0.013–0.028 s/run |
+| Algorithm | Dataset | Corpus Size | Typical Runtime |
+|-----------|---------|-------------|----------------|
+| K-Means | Newsgroups | 18,846 | 0.3–0.9 s/run |
+| K-Means | Wikipedia | 42,786 | 3–11 s/run |
+| Hierarchical (ward) | Newsgroups | 18,846 | 5.5–6.5 s/run |
+| Hierarchical (ward) | Wikipedia | 8,000 (sampled) | 15–25 s/run |
+| GMM (full) | Newsgroups | 18,846 | 1.3–5.5 s/run |
+| GMM (full) | Wikipedia | 42,786 | 30–80 s/run |
 
-K-Means is 6–15× faster than hierarchical on Newsgroups. The O(n²) memory requirement of `AgglomerativeClustering` makes it impractical for corpora larger than ~50,000 documents.
+K-Means is 6–15× faster than hierarchical clustering. The O(n²) memory requirement of `AgglomerativeClustering` makes it impractical for corpora >10,000 documents without subsampling.
 
 ---
 
@@ -282,73 +270,70 @@ K-Means is 6–15× faster than hierarchical on Newsgroups. The O(n²) memory re
 
 ### Why K-Means Wins
 
-1. **LSA normalization** — L2-normalized embeddings make cosine similarity equivalent to Euclidean distance, which is the distance K-Means optimizes. The preprocessing pipeline is specifically designed for K-Means.
-2. **Scalability** — K-Means scales linearly with n, while hierarchical clustering is quadratic in memory and GMM with full covariance is cubic in feature dimension.
-3. **Spherical clusters** — After SVD, document clusters in LSA space tend to be approximately spherical and well-separated, matching K-Means assumptions.
+1. **LSA normalization** — L2-normalized embeddings make cosine similarity equivalent to Euclidean distance, which K-Means optimizes directly.
+2. **Scalability** — K-Means scales as O(n·k·d·iterations), while hierarchical is O(n²) in memory.
+3. **Spherical clusters** — After SVD + L2 normalization, document clusters in LSA space are approximately spherical, matching K-Means assumptions.
 
 ### Why Hierarchical (Ward) > Complete/Average
 
-Ward linkage minimizes within-cluster variance at each merge step, which is equivalent to K-Means at the merge level. Complete and average linkage are sensitive to outliers and produce chain-like clusters in high-dimensional spaces — a known failure mode called "chaining."
+Ward linkage minimizes within-cluster variance at each merge step. Complete and average linkage are sensitive to outliers and produce chain-like clusters in high-dimensional spaces ("chaining effect").
 
-### Why Wikipedia Scores Higher
+### Why Wikipedia Scores Higher Than Newsgroups
 
-1. **Higher LSA variance** — 56.5% variance explained at 100 components vs 12.1% for Newsgroups. More signal is preserved.
-2. **Cleaner topics** — Biographical summaries have stronger domain keywords (athlete names/sports, scientist names/fields) vs Usenet where discussion threads meander.
-3. **Shorter, focused texts** — Wikipedia summaries are 2–5 sentences focused on the person's field, reducing noise.
-
-### Low Absolute Silhouette Scores on Newsgroups
-
-A silhouette of 0.055 is low in absolute terms but expected for text data: documents occupy a sparse region of a very high-dimensional space even after SVD, and boundaries between adjacent topics (e.g., `sci.med` vs `sci.space`) are inherently fuzzy. These scores are consistent with published benchmarks on the 20 Newsgroups dataset.
+1. **Richer content** — Full article text (avg ~1,100 chars) vs. Usenet discussion threads that meander across topics
+2. **Domain specificity** — Biographical articles concentrate domain vocabulary (athlete + sport + tournament vs. general-language Usenet)
+3. **Less noise** — Wikipedia articles have structured prose; Usenet posts contain quoted replies, signatures, and metadata (partially removed)
 
 ---
 
-## 9. REST API and Dashboard
+## 9. API and Dashboard
 
-### FastAPI
+### FastAPI REST API
 
-A production-ready REST API (`app/api.py`) exposes:
-- **`POST /predict`** — Cluster assignment for arbitrary input text (K-Means, GMM)
-- **`GET /metrics/{dataset}`** — Full experiment metrics table
-- **`GET /metrics/{dataset}/best`** — Best model by any metric
-- **`GET /clusters/{dataset}/{algorithm}/{k}`** — List available model keys
-- **`GET /health`** — Liveness check with loaded dataset status
+`app/api.py` exposes:
+- `POST /predict` — Cluster assignment for any input text
+- `GET /metrics/{dataset}` — Full experiment metrics table
+- `GET /metrics/{dataset}/best` — Best model by any metric
+- `GET /health` — Liveness check
 
-Hierarchical clustering is explicitly excluded from the `/predict` endpoint since `AgglomerativeClustering` has no `.predict()` method and cannot generalize to unseen documents.
+### Streamlit Dashboard (5 tabs)
 
-### Streamlit Dashboard
-
-An interactive 4-tab dashboard (`app/streamlit_app.py`) provides:
-1. **Cluster Plot** — PCA 2D scatter with Plotly hover tooltips
-2. **Cluster Explorer** — Top terms bar chart + sample document expanders per cluster
-3. **Metrics** — Sortable experiment table with green/red gradient on silhouette + trend line plots
-4. **Predict** — Free-text input → cluster assignment + top cluster terms
+| Tab | Content |
+|-----|---------|
+| Overview | KPI cards, algorithm comparison bar charts, metrics table |
+| Cluster Map | Interactive PCA 2D scatter with hover tooltips and cluster-size bar |
+| Cluster Explorer | Top-15 TF-IDF terms, sample documents per cluster |
+| Metrics | Conditional-formatted table, trend lines, elbow curve |
+| Predict | Free-text input → cluster assignment + GMM class probabilities |
 
 ---
 
 ## 10. Conclusion
 
-Across both datasets, **K-Means is the best-performing algorithm** for text clustering in the TF-IDF + LSA pipeline, achieving silhouette scores of 0.0548 (Newsgroups) and 0.1373 (Wikipedia People) at k=25. The combination of L2-normalized LSA embeddings and K-Means is a well-established and empirically strong baseline for document clustering.
+Across both datasets, **K-Means is the best-performing algorithm** for text clustering in the TF-IDF + LSA pipeline:
+
+- Newsgroups: Silhouette = 0.0548 at k=25
+- Wikipedia: Silhouette = 0.1192 at k=20
 
 Key findings:
 
-1. Monotonically increasing silhouette with k suggests both corpora have sub-structure beyond the coarse topical level (20 topics for Newsgroups; ~8 domains for Wikipedia).
-2. Ward linkage is the only viable hierarchical strategy for high-dimensional text; complete and average linkage produce degenerate clusters.
-3. GMM with tied covariance outperforms full covariance on Newsgroups, where limited data makes full-covariance estimation unreliable.
-4. Wikipedia biographical articles cluster more cleanly than Usenet posts despite being a much smaller corpus, because the texts are more focused and the LSA representation captures more variance.
-5. Qualitative cluster analysis confirms that top TF-IDF terms clearly identify the topical theme of each cluster, validating the unsupervised approach for document organization.
+1. Full Wikipedia biographical text (42,786 articles from Kaggle) clusters significantly better than short summaries, with silhouette scores roughly 2× higher.
+2. Ward linkage is the only viable hierarchical strategy for high-dimensional text; other linkages produce degenerate solutions.
+3. GMM with tied covariance is competitive with K-Means on Wikipedia but underperforms on Newsgroups due to parameter over-specification.
+4. Qualitative cluster analysis confirms that top TF-IDF terms clearly identify cluster themes, validating the unsupervised pipeline for document organization.
+5. The O(n²) memory constraint of hierarchical clustering requires subsampling for corpora >10k documents, limiting its scalability.
 
 ---
 
 ## Appendix: Reproducibility
 
-All experiments are fully reproducible with `random_state=42` throughout.
+All experiments are fully reproducible with `random_state = 42` throughout.
 
 ```bash
-# Full reproduction from scratch
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-python -c "import nltk; nltk.download('punkt'); nltk.download('wordnet'); nltk.download('stopwords'); nltk.download('averaged_perceptron_tagger')"
-python run_pipeline.py --dataset all
+# Download Wikipedia dataset from Kaggle into data/raw/people_wiki.csv
+python run_pipeline.py
 pytest tests/ -v
 streamlit run app/streamlit_app.py
 ```

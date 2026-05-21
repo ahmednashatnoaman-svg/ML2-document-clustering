@@ -62,6 +62,37 @@ def compute_calinski_harabasz(X: np.ndarray, labels: np.ndarray) -> float:
 
 
 # ---------------------------------------------------------------------------
+# Cluster naming
+# ---------------------------------------------------------------------------
+
+def get_cluster_names(
+    top_terms: dict[int, list[str]],
+    n_words: int = 3,
+) -> dict[int, str]:
+    """Generate a short human-readable name for each cluster from its top TF-IDF terms.
+
+    Args:
+        top_terms: output of get_top_terms — {cluster_id: [term, ...]}
+        n_words: number of top terms to join into the name
+
+    Returns:
+        dict mapping cluster_id → name string, e.g. {0: "science physics quantum"}
+    """
+    return {
+        cid: " / ".join(terms[:n_words])
+        for cid, terms in top_terms.items()
+    }
+
+
+def cluster_display_label(cluster_id: int, cluster_names: dict[int, str]) -> str:
+    """Format a cluster for display: 'Cluster 3 — science / physics / quantum'."""
+    name = cluster_names.get(cluster_id, "")
+    if name:
+        return f"Cluster {cluster_id} — {name}"
+    return f"Cluster {cluster_id}"
+
+
+# ---------------------------------------------------------------------------
 # Qualitative analysis
 # ---------------------------------------------------------------------------
 
@@ -143,17 +174,32 @@ def evaluate_result(
     corpus: list[str],
     config: dict,
 ) -> dict:
-    """Compute all metrics for a single ClusterResult."""
+    """Compute all metrics for a single ClusterResult.
+
+    For hierarchical results fitted on a sample (extra['sample_idx'] present),
+    metrics are computed on the same sample to keep X and labels aligned.
+    """
     eval_cfg = config.get("evaluation", {})
     top_n = eval_cfg.get("top_n_terms", 15)
     sample_n = eval_cfg.get("sample_docs_per_cluster", 3)
     sil_sample = eval_cfg.get("silhouette_sample_size", 5000)
 
-    sil = compute_silhouette(X, result.labels, sample_size=sil_sample)
-    db = compute_davies_bouldin(X, result.labels)
-    ch = compute_calinski_harabasz(X, result.labels)
-    top_terms = get_top_terms(result.labels, vectorizer, X_tfidf, n=top_n)
-    examples = get_cluster_examples(result.labels, corpus, n=sample_n)
+    # Use the sample subset when labels were fitted on a subsample
+    sample_idx = result.extra.get("sample_idx", None)
+    if sample_idx is not None:
+        X_eval = X[sample_idx]
+        X_tfidf_eval = X_tfidf[sample_idx]
+        corpus_eval = [corpus[i] for i in sample_idx]
+    else:
+        X_eval = X
+        X_tfidf_eval = X_tfidf
+        corpus_eval = corpus
+
+    sil = compute_silhouette(X_eval, result.labels, sample_size=sil_sample)
+    db = compute_davies_bouldin(X_eval, result.labels)
+    ch = compute_calinski_harabasz(X_eval, result.labels)
+    top_terms = get_top_terms(result.labels, vectorizer, X_tfidf_eval, n=top_n)
+    examples = get_cluster_examples(result.labels, corpus_eval, n=sample_n)
     sizes = cluster_size_distribution(result.labels)
 
     return {

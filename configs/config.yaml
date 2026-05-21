@@ -42,6 +42,7 @@ clustering:
       - ward
       - complete
       - average
+    max_docs: 8000  # sample limit to avoid O(n²) memory on large corpora
   gmm:
     n_components: [5, 10, 15, 20]
     covariance_type:

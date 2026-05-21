@@ -1,9 +1,9 @@
 """One-time model initialisation for Hugging Face Spaces.
 
 Called by the Streamlit app at startup when no trained models are found.
-Runs a reduced pipeline so the Space becomes interactive in ~60 seconds:
-  - Wikipedia People  : full k sweep (538 docs — very fast)
-  - 20 Newsgroups     : kmeans only, k in [5, 10, 20] (skips hierarchical/GMM for speed)
+Runs a reduced pipeline so the Space becomes interactive in ~5-10 minutes:
+  - Wikipedia People  : ~42k docs, fast config (k in [5,10,20], ward-only hier, tied GMM)
+  - 20 Newsgroups     : ~18k docs, same fast config
 """
 
 import logging
