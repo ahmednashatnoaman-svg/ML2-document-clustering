@@ -4,7 +4,7 @@ emoji: 🔍
 colorFrom: blue
 colorTo: purple
 sdk: docker
-app_port: 8501
+app_port: 7860
 pinned: false
 license: mit
 ---
@@ -16,9 +16,7 @@ license: mit
 [![Streamlit](https://img.shields.io/badge/Streamlit-1.35%2B-red?logo=streamlit)](https://streamlit.io/)
 [![HF Spaces](https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-Spaces-yellow)](https://huggingface.co/spaces/AhmedNashat1/document-clustering-explorer)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-52%20passed-brightgreen)](#testing)
-
-An end-to-end machine learning project that applies **unsupervised clustering** to two large document corpora — **20 Newsgroups** (18,846 posts) and **Wikipedia People** (42,786 biographies) — using TF-IDF + LSA feature extraction and three clustering algorithms.
+An end-to-end machine learning project that applies **unsupervised clustering** to two large document corpora — **20 Newsgroups** (18,846 posts) and **Wikipedia** (20,000 articles via HuggingFace) — using TF-IDF + LSA feature extraction and three clustering algorithms.
 
 ---
 
@@ -33,12 +31,11 @@ The dashboard lets you explore clusters interactively, compare algorithm perform
 ## Key Features
 
 - **Three clustering algorithms**: K-Means, Agglomerative Hierarchical, Gaussian Mixture Models
-- **Two large datasets**: 20 Newsgroups (sklearn) and Wikipedia People (Kaggle, 42k articles)
+- **Two large datasets**: 20 Newsgroups (sklearn) and Wikipedia (20k articles via HuggingFace)
 - **Full NLP pipeline**: text cleaning → lemmatization → TF-IDF (10k features, bigrams) → TruncatedSVD/LSA (100d) → L2 normalization
 - **Automatic cluster naming**: each cluster labeled with its top 3 TF-IDF terms (e.g., "music / orchestra / composer")
 - **Interactive Streamlit dashboard**: 5-tab KPI dashboard with PCA scatter, top-terms bar charts, metrics comparison, and live prediction
 - **FastAPI REST endpoint**: `/predict` endpoint for integrating into other applications
-- **52 automated tests** across preprocessing, features, and clustering
 - **Reproducible results**: fixed seeds, config-driven hyperparameters
 
 ---
@@ -48,23 +45,9 @@ The dashboard lets you explore clusters interactively, compare algorithm perform
 | Dataset | Source | Documents | Description |
 |---|---|---|---|
 | 20 Newsgroups | `sklearn.datasets` | 18,846 | Usenet posts across 20 topic categories |
-| Wikipedia People | [Kaggle](https://www.kaggle.com/datasets/sameersmahajan/people-wikipedia-data) | 42,786 | Biographical Wikipedia articles |
+| Wikipedia | [HuggingFace `wikimedia/wikipedia`](https://huggingface.co/datasets/wikimedia/wikipedia) | 20,000 | English Wikipedia articles (streamed) |
 
-### Downloading the Wikipedia Dataset
-
-The Newsgroups dataset downloads automatically from scikit-learn. For Wikipedia People:
-
-1. Install the Kaggle CLI: `pip install kaggle`
-2. Place your `kaggle.json` token in `~/.kaggle/`
-3. Download the dataset:
-
-```bash
-kaggle datasets download sameersmahajan/people-wikipedia-data -p data/raw/ --unzip
-```
-
-The file `data/raw/people_wiki.csv` should contain columns: `URI`, `name`, `text`.
-
-If the CSV is not found, the pipeline falls back to auto-fetching articles via the Wikipedia REST API.
+The Newsgroups dataset downloads automatically from scikit-learn. The Wikipedia dataset is streamed from HuggingFace at first boot — no credentials required.
 
 ---
 
@@ -85,11 +68,6 @@ If the CSV is not found, the pipeline falls back to auto-fetching articles via t
 │   ├── clustering.py          # K-Means, Hierarchical, GMM runners
 │   ├── evaluation.py          # Silhouette, DB, CH metrics + top terms
 │   └── visualization.py      # Matplotlib: PCA/t-SNE, elbow, heatmaps
-├── tests/
-│   ├── conftest.py            # Shared fixtures
-│   ├── test_preprocessing.py
-│   ├── test_features.py
-│   └── test_clustering.py
 ├── notebooks/
 │   ├── 01_eda.ipynb
 │   ├── 02_preprocessing.ipynb
@@ -164,12 +142,6 @@ cd ML2-document-clustering
 python -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-```
-
-### 2. (Optional) Download Wikipedia dataset
-
-```bash
-kaggle datasets download sameersmahajan/people-wikipedia-data -p data/raw/ --unzip
 ```
 
 ### 3. Run the full pipeline
@@ -288,36 +260,20 @@ Cluster 15 — book / published / novel
 
 ---
 
-## Testing
-
-```bash
-pytest tests/ -v
-```
-
-52 tests covering preprocessing, TF-IDF/SVD features, and all three clustering algorithms.
-
-```
-tests/test_preprocessing.py   # clean_text, tokenize, preprocess_corpus
-tests/test_features.py         # build_tfidf, reduce_with_svd, transform_new_docs
-tests/test_clustering.py       # run_kmeans, run_hierarchical, run_gmm
-```
-
----
-
 ## Docker
 
 ```bash
 docker build -t doc-clustering .
-docker run -p 8501:8501 doc-clustering
+docker run -p 7860:7860 doc-clustering
 ```
 
-Open http://localhost:8501. The container auto-trains models on first startup.
+Open http://localhost:7860. The container auto-trains models on first startup if no pre-built artifacts are found.
 
 ---
 
 ## Deployment — Hugging Face Spaces
 
-The space at `AhmedNashat1/document-clustering-explorer` uses the Docker SDK with `app_port: 8501`. On first boot, `app/startup.py` automatically trains a fast set of clustering models (reduced config, ~5-10 min) so the app is immediately usable without pre-built artifacts.
+The space at `AhmedNashat1/document-clustering-explorer` uses the Docker SDK (port 7860). Pre-trained models are included in the repository so the dashboard loads immediately — no training needed at startup. On first boot, `app/startup.py` trains the 20 Newsgroups models if they are missing.
 
 ---
 

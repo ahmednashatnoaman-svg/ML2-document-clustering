@@ -292,6 +292,38 @@ def cluster_label(cluster_id: int, names: dict[int, str]) -> str:
     return f"Cluster {cluster_id} — {name}" if name else f"Cluster {cluster_id}"
 
 
+def _top_terms_svd_fallback(
+    cluster_id: int,
+    algorithm: str,
+    model,
+    labels: np.ndarray,
+    X_red: np.ndarray,
+    vectorizer,
+    svd,
+    n: int = 15,
+) -> list[str]:
+    """Compute top n TF-IDF terms for a cluster via SVD centroid back-projection.
+
+    Works without X_tfidf — uses cluster_centers_ (KMeans), means_ (GMM),
+    or the mean of X_red rows (Hierarchical) then inverts through SVD.
+    """
+    feature_names = vectorizer.get_feature_names_out()
+
+    if hasattr(model, "cluster_centers_"):
+        centroid = model.cluster_centers_[cluster_id]
+    elif hasattr(model, "means_"):
+        centroid = model.means_[cluster_id]
+    else:
+        mask = labels == cluster_id
+        if not mask.any():
+            return []
+        centroid = X_red[mask].mean(axis=0)
+
+    tfidf_row = svd.inverse_transform(centroid[np.newaxis, :])[0]
+    top_idx = np.argsort(tfidf_row)[::-1][:n]
+    return feature_names[top_idx].tolist()
+
+
 def _hier_sample_idx(n_total: int) -> np.ndarray | None:
     """Reproduce the subsample indices used when fitting hierarchical on large corpora.
 
@@ -387,7 +419,7 @@ def sidebar() -> dict:
     st.sidebar.markdown(
         "**Datasets**\n\n"
         "- 20 Newsgroups (18,846 docs, 20 topics)\n"
-        "- Wikipedia People (42,786 biographies)"
+        "- Wikipedia (20,000 articles via HuggingFace)"
     )
     st.sidebar.markdown(
         "**Pipeline**\n\n"
@@ -687,36 +719,52 @@ def tab_cluster_explorer(params: dict, arts: dict) -> None:
         corpus_aligned  = corpus
 
     col1, col2 = st.columns([2, 1])
+    terms: list[str] = []
     if tfidf_path.exists() and X_tfidf_aligned is not None:
         from src.evaluation import get_top_terms
-        top_terms = get_top_terms(labels, arts["vectorizer"], X_tfidf_aligned, n=15)
-        terms = top_terms.get(int(selected_cluster), [])
+        top_terms_dict = get_top_terms(labels, arts["vectorizer"], X_tfidf_aligned, n=15)
+        terms = top_terms_dict.get(int(selected_cluster), [])
+    elif X_red is not None:
+        # Fallback: approximate top terms via SVD centroid back-projection (no X_tfidf needed)
+        model_path = Path(MODELS_DIR) / (
+            f"{params['algorithm']}_{params['dataset']}_k{params['k']}"
+            + (f"_{params['suffix']}" if params['suffix'] else "") + ".pkl"
+        )
+        if model_path.exists():
+            import joblib as _jl
+            _model = _jl.load(model_path)
+            svd = arts["svd_pipeline"].named_steps["svd"]
+            X_aligned, _, _ = _align_to_labels(labels, X_red)
+            terms = _top_terms_svd_fallback(
+                int(selected_cluster), params["algorithm"], _model,
+                labels, X_aligned, arts["vectorizer"], svd, n=15,
+            )
 
-        with col1:
-            if terms:
-                st.markdown("**Top TF-IDF Terms**")
-                term_df = pd.DataFrame({
-                    "Term": terms[::-1],
-                    "Rank": list(range(len(terms), 0, -1)),
-                })
-                fig = px.bar(
-                    term_df, x="Rank", y="Term",
-                    orientation="h",
-                    color="Rank",
-                    color_continuous_scale="Blues",
-                    height=420,
-                    labels={"Rank": "Importance rank"},
-                )
-                fig.update_layout(showlegend=False, coloraxis_showscale=False,
-                                   plot_bgcolor="white", paper_bgcolor="white",
-                                   margin=dict(l=0, r=0, t=10, b=0))
-                st.plotly_chart(fig, use_container_width=True)
+    with col1:
+        if terms:
+            st.markdown("**Top Terms**")
+            term_df = pd.DataFrame({
+                "Term": terms[::-1],
+                "Rank": list(range(len(terms), 0, -1)),
+            })
+            fig = px.bar(
+                term_df, x="Rank", y="Term",
+                orientation="h",
+                color="Rank",
+                color_continuous_scale="Blues",
+                height=420,
+                labels={"Rank": "Importance rank"},
+            )
+            fig.update_layout(showlegend=False, coloraxis_showscale=False,
+                               plot_bgcolor="white", paper_bgcolor="white",
+                               margin=dict(l=0, r=0, t=10, b=0))
+            st.plotly_chart(fig, use_container_width=True)
 
-        with col2:
-            if terms:
-                st.markdown("**Term List**")
-                for i, t in enumerate(terms, 1):
-                    st.write(f"{i}. `{t}`")
+    with col2:
+        if terms:
+            st.markdown("**Term List**")
+            for i, t in enumerate(terms, 1):
+                st.write(f"{i}. `{t}`")
 
     if corpus_aligned and len(corpus_aligned) == len(labels):
         from src.evaluation import get_cluster_examples
@@ -871,18 +919,27 @@ def tab_predict(params: dict, arts: dict) -> None:
                 from scipy.sparse import load_npz
                 tfidf_path = Path(PROCESSED_DIR) / f"X_tfidf_{params['dataset']}.npz"
                 labels_arr = load_labels(params["dataset"], algo, k, suffix)
-                if labels_arr is not None and tfidf_path.exists() and arts["X_reduced"] is not None:
-                    X_tfidf_full = load_npz(str(tfidf_path))
-                    _, X_tfidf_aligned, _ = _align_to_labels(
-                        labels_arr, arts["X_reduced"], X_tfidf_full=X_tfidf_full
-                    )
-                    from src.evaluation import get_top_terms
-                    top_terms = get_top_terms(labels_arr, arts["vectorizer"],
-                                              X_tfidf_aligned, n=12)
-                    terms = top_terms.get(cluster_id, [])
-                    if terms:
-                        st.markdown("**Cluster Top Terms:**")
-                        st.write("  ".join([f"`{t}`" for t in terms]))
+                terms: list[str] = []
+                if labels_arr is not None and arts["X_reduced"] is not None:
+                    if tfidf_path.exists():
+                        X_tfidf_full = load_npz(str(tfidf_path))
+                        _, X_tfidf_aligned, _ = _align_to_labels(
+                            labels_arr, arts["X_reduced"], X_tfidf_full=X_tfidf_full
+                        )
+                        from src.evaluation import get_top_terms
+                        top_dict = get_top_terms(labels_arr, arts["vectorizer"],
+                                                 X_tfidf_aligned, n=12)
+                        terms = top_dict.get(cluster_id, [])
+                    else:
+                        svd = arts["svd_pipeline"].named_steps["svd"]
+                        X_aligned, _, _ = _align_to_labels(labels_arr, arts["X_reduced"])
+                        terms = _top_terms_svd_fallback(
+                            cluster_id, algo, model, labels_arr, X_aligned,
+                            arts["vectorizer"], svd, n=12,
+                        )
+                if terms:
+                    st.markdown("**Cluster Top Terms:**")
+                    st.write("  ".join([f"`{t}`" for t in terms]))
 
             if names:
                 with st.expander("All clusters in this model"):

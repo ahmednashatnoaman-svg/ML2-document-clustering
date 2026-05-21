@@ -18,11 +18,10 @@ import nltk; \
 
 COPY . .
 
-EXPOSE 8501 8000
+EXPOSE 7860
 
-# Default: Streamlit dashboard
-# Override CMD to run the API: docker run ... uvicorn app.api:app --host 0.0.0.0 --port 8000
+# HuggingFace Spaces uses port 7860; local docker can override with -p 8501:7860
 CMD ["streamlit", "run", "app/streamlit_app.py", \
-     "--server.port=8501", \
+     "--server.port=7860", \
      "--server.address=0.0.0.0", \
      "--server.headless=true"]
