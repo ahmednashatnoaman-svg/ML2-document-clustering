@@ -1,0 +1,67 @@
+seed: 42
+
+paths:
+  data_raw: data/raw
+  data_processed: data/processed
+  models: models
+  figures: outputs/figures
+  reports: outputs/reports
+
+datasets:
+  newsgroups:
+    n_categories: 20
+    subset: all
+    remove:
+      - headers
+      - footers
+      - quotes
+  wikipedia:
+    filename: people_wiki.csv
+    text_col: text
+    name_col: name
+    min_text_length: 100
+
+tfidf:
+  max_features: 10000
+  ngram_range: [1, 2]
+  min_df: 5
+  max_df: 0.95
+  sublinear_tf: true
+
+svd:
+  n_components: 100
+
+clustering:
+  kmeans:
+    k_range: [5, 10, 15, 20, 25]
+    n_init: 10
+    max_iter: 300
+  hierarchical:
+    n_clusters: [5, 10, 15, 20]
+    linkage:
+      - ward
+      - complete
+      - average
+  gmm:
+    n_components: [5, 10, 15, 20]
+    covariance_type:
+      - full
+      - tied
+      - diag
+    max_iter: 100
+
+evaluation:
+  top_n_terms: 15
+  sample_docs_per_cluster: 3
+  silhouette_sample_size: 5000
+
+visualization:
+  figsize: [12, 8]
+  dpi: 150
+  tsne:
+    perplexity: 30
+    n_iter: 1000
+    n_components: 2
+  dendrogram:
+    sample_size: 500
+    truncate_level: 5
