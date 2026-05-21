@@ -731,8 +731,7 @@ def tab_cluster_explorer(params: dict, arts: dict) -> None:
             + (f"_{params['suffix']}" if params['suffix'] else "") + ".pkl"
         )
         if model_path.exists():
-            import joblib as _jl
-            _model = _jl.load(model_path)
+            _model = joblib.load(model_path)
             svd = arts["svd_pipeline"].named_steps["svd"]
             X_aligned, _, _ = _align_to_labels(labels, X_red)
             terms = _top_terms_svd_fallback(
