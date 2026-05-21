@@ -1,13 +1,3 @@
----
-title: Document Clustering Explorer
-emoji: 🔍
-colorFrom: blue
-colorTo: purple
-sdk: docker
-app_port: 7860
-pinned: false
-license: mit
----
 
 # Unsupervised Document Clustering
 
