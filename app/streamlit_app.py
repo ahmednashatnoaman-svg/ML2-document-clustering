@@ -562,6 +562,9 @@ def tab_cluster_plot(params: dict, arts: dict) -> None:
 
     from sklearn.decomposition import PCA
     corpus = load_corpus(params["dataset"])
+    if arts["X_reduced"] is None:
+        st.warning("Reduced feature matrix not available for this dataset.")
+        return
     X_vis, _, corpus_vis = _align_to_labels(labels, arts["X_reduced"],
                                              corpus_full=corpus)
 
@@ -672,11 +675,16 @@ def tab_cluster_explorer(params: dict, arts: dict) -> None:
     tfidf_path = Path(PROCESSED_DIR) / f"X_tfidf_{params['dataset']}.npz"
 
     corpus = load_corpus(params["dataset"])
-    _, X_tfidf_aligned, corpus_aligned = _align_to_labels(
-        labels, arts["X_reduced"],
-        X_tfidf_full=load_npz(str(tfidf_path)) if tfidf_path.exists() else None,
-        corpus_full=corpus,
-    )
+    X_red  = arts["X_reduced"]
+    if X_red is not None:
+        _, X_tfidf_aligned, corpus_aligned = _align_to_labels(
+            labels, X_red,
+            X_tfidf_full=load_npz(str(tfidf_path)) if tfidf_path.exists() else None,
+            corpus_full=corpus,
+        )
+    else:
+        X_tfidf_aligned = None
+        corpus_aligned  = corpus
 
     col1, col2 = st.columns([2, 1])
     if tfidf_path.exists() and X_tfidf_aligned is not None:
@@ -863,7 +871,7 @@ def tab_predict(params: dict, arts: dict) -> None:
                 from scipy.sparse import load_npz
                 tfidf_path = Path(PROCESSED_DIR) / f"X_tfidf_{params['dataset']}.npz"
                 labels_arr = load_labels(params["dataset"], algo, k, suffix)
-                if labels_arr is not None and tfidf_path.exists():
+                if labels_arr is not None and tfidf_path.exists() and arts["X_reduced"] is not None:
                     X_tfidf_full = load_npz(str(tfidf_path))
                     _, X_tfidf_aligned, _ = _align_to_labels(
                         labels_arr, arts["X_reduced"], X_tfidf_full=X_tfidf_full
